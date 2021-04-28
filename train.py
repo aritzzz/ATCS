@@ -83,8 +83,7 @@ def train_model(dataset, config):
                         checkpoint_callback = ModelCheckpoint(save_weights_only=True, mode='max', monitor='validation_accuracy'),
                         gpus = n_gpus,
                         max_epochs = config['max_epochs'],
-                        progress_bar_refresh_rate=1,
-                        fast_dev_run=100)
+                        progress_bar_refresh_rate=1)
     trainer.logger._log_graph = True
     trainer.logger._default_hp_metric = None
 
@@ -98,7 +97,7 @@ def train_model(dataset, config):
         pl.seed_everything(config['seed'])
         model = BaselineTrainer(config)
         trainer.fit(model, train_iter, val_iter)
-        #model = BaselineTrainer.load_from_checkpoint(trainer.checkpoint_callback.best_model_path)
+        model = BaselineTrainer.load_from_checkpoint(trainer.checkpoint_callback.best_model_path)
 
     validation_result = trainer.test(model, test_dataloaders=val_iter, verbose=False)
     test_result = trainer.test(model, test_dataloaders=test_iter, verbose=False)
