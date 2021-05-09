@@ -66,7 +66,6 @@ class MetaDataset(Dataset):
 
 
 
-
 class MetaLoader(object):
     def __init__(self, dataset):
         self.dataset = dataset
@@ -80,11 +79,11 @@ class MetaLoader(object):
             batch = self.dataset.data.prepare_BERT_batch(batch,self.dataset.K)
             yield batch
 
-class MNLI(Dataset):
+class BaseDataset(Dataset):
     def __init__(self, data, labels):
-        super(MNLI, self).__init__()
+        super(BaseDataset, self).__init__()
         self.data = data
-        self.labels = {'neutral': 0, 'entailment': 1, 'contradiction': 2}
+        self.labels = labels
 
     def __getitem__(self, index):
         ret = self.data[index]
@@ -92,6 +91,34 @@ class MNLI(Dataset):
 
     def __len__(self):
         return len(self.data)
+
+    @staticmethod
+    def preprocess(sentence, labels=None, label=False):
+        if not label:
+            return TOKENIZER(sentence[0], sentence[1], add_special_tokens=True)
+        else:
+            return labels[sentence]
+    
+    def prepare_BERT_batch(self, batch, batch_size):
+        """Prepare batch for BERT.
+        Adds the special tokens to input, creates the token_type_ids and attention mask tensors.
+        """
+        batch = batch
+        input_ids = batch['input']['input_ids']
+        token_type_ids = batch['input']['token_type_ids']
+        attention_mask = batch['input']['attention_mask']
+
+        input_ids = torch.LongTensor(input_ids)
+        attention_mask = torch.LongTensor(attention_mask) #(input_ids != PAD_ID).long()
+        token_type_ids = torch.LongTensor(token_type_ids)
+        labels = torch.LongTensor(batch['label'])
+        return (input_ids, token_type_ids, attention_mask, labels)
+
+class MNLI(BaseDataset):
+    def __init__(self, data, labels):
+        super(BaseDataset, self).__init__()
+        self.data = data
+        self.labels = labels 
      
     @classmethod   
     def read(cls, path = './multinli_1.0/', split='train', slice_=-1):
@@ -110,40 +137,57 @@ class MNLI(Dataset):
             premise = line['sentence1']
             hypothesis = line['sentence2']
             data.append(
-                        {'label':MNLI.preprocess(label_, label=True),
+                        {'label':MNLI.preprocess(label_, labels=labels, label=True),
                         'input':MNLI.preprocess((premise, hypothesis))}
                         )
         return cls(data, labels)
     
-    @staticmethod
-    def preprocess(sentence, label=False):
-        if not label:
-            return TOKENIZER(sentence[0], sentence[1], add_special_tokens=True)
-        else:
-            labels = {'neutral': 0, 'entailment': 1, 'contradiction': 2}
-            return labels[sentence]
     
-    def prepare_BERT_batch(self, batch, batch_size):
-        """Prepare batch for BERT.
-        Adds the special tokens to input, creates the token_type_ids and attention mask tensors.
-        """
-        batch = batch
-        input_ids = batch['input']['input_ids']
-        token_type_ids = batch['input']['token_type_ids']
-        attention_mask = batch['input']['attention_mask']
 
-        input_ids = torch.LongTensor(input_ids)
-        attention_mask = torch.LongTensor(attention_mask) #(input_ids != PAD_ID).long()
-        token_type_ids = torch.LongTensor(token_type_ids)
-        labels = torch.LongTensor(batch['label'])
-        return (input_ids, token_type_ids, attention_mask, labels)
+class StanceDataset(BaseDataset):
+    def __init__(self, data, labels):
+        super(BaseDataset, self).__init__()
+        self.data = data
+        self.labels = labels
+    
+
+    @classmethod
+    def read(cls, path='./claim_stance/', split='train', slice_=-1):
+        split_path = os.path.join(path, 'claim_stance_dataset_v1' + '.csv')
+        df = pd.read_csv(split_path)[["split", "topicText", "claims.claimCorrectedText", "claims.stance"]]
+
+        data = []
+        labels = {'PRO': 1, 'CON': 0}
+        pbar = tqdm(df.iterrows())
+        for _, row in pbar:
+            pbar.set_description("Reading and Preparing dataset...")
+            if row['split'] != split:
+                continue
+            sent1 = row['topicText']
+            sent2 = row['claims.claimCorrectedText']
+            label_ = row['claims.stance']
+            data.append(
+                        {'label':StanceDataset.preprocess(label_, labels=labels, label=True),
+                        'input':StanceDataset.preprocess((sent1, sent2))}
+                        )
+        return cls(data, labels)
 
 
 
 
 if __name__ == "__main__":
 
-    train = MNLI.read(path='./multinli_1.0/', split='train', slice_=1000)
+    # train = MNLI.read(path='./multinli_1.0/', split='train', slice_=1000)
+
+    # metadataset = MetaDataset.Initialize(train)
+
+
+    # loader = MetaLoader(metadataset).get_data_loader(metadataset.dataloaders()[0])
+    
+    # print(next(loader))
+
+
+    train = StanceDataset.read(split='train', slice_=1000)
 
     metadataset = MetaDataset.Initialize(train)
 
