@@ -60,10 +60,9 @@ class MetaDataset(Dataset):
         return [DataLoader(dataset, batch_size=self.K, collate_fn=self.collater) for dataset in self.meta_data.values()]
 
     def collater(self, batch):
-        premise = TOKENIZER.pad([item['premise'] for item in batch], padding=True)
-        hypothesis = TOKENIZER.pad([item['hypothesis'] for item in batch], padding=True)
+        premise = TOKENIZER.pad([item['input'] for item in batch], padding=True)
         label = [item['label'] for item in batch]
-        return {'premise': premise, 'hypothesis': hypothesis, 'label':label}
+        return {'input': premise, 'label': label}
 
 
 
@@ -112,15 +111,14 @@ class MNLI(Dataset):
             hypothesis = line['sentence2']
             data.append(
                         {'label':MNLI.preprocess(label_, label=True),
-                        'premise':MNLI.preprocess(premise),
-                        'hypothesis':MNLI.preprocess(hypothesis)}
+                        'input':MNLI.preprocess((premise, hypothesis))}
                         )
         return cls(data, labels)
     
     @staticmethod
     def preprocess(sentence, label=False):
         if not label:
-            return TOKENIZER(sentence)
+            return TOKENIZER(sentence[0], sentence[1], add_special_tokens=True)
         else:
             labels = {'neutral': 0, 'entailment': 1, 'contradiction': 2}
             return labels[sentence]
@@ -130,16 +128,12 @@ class MNLI(Dataset):
         Adds the special tokens to input, creates the token_type_ids and attention mask tensors.
         """
         batch = batch
-        input_ids = []
-        token_type_ids = []
-        for i in range(batch_size):
-            seq_1 = batch['premise']['input_ids'][i]
-            seq_2 = batch['hypothesis']['input_ids'][i]
-            input_ids.append(TOKENIZER.build_inputs_with_special_tokens(seq_1, seq_2))
-            token_type_ids.append(TOKENIZER.create_token_type_ids_from_sequences(seq_1, seq_2))
+        input_ids = batch['input']['input_ids']
+        token_type_ids = batch['input']['token_type_ids']
+        attention_mask = batch['input']['attention_mask']
 
         input_ids = torch.LongTensor(input_ids)
-        attention_mask = (input_ids != PAD_ID).long()
+        attention_mask = torch.LongTensor(attention_mask) #(input_ids != PAD_ID).long()
         token_type_ids = torch.LongTensor(token_type_ids)
         labels = torch.LongTensor(batch['label'])
         return (input_ids, token_type_ids, attention_mask, labels)
