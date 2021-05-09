@@ -64,40 +64,18 @@ class MetaDataset(Dataset):
 
 
 
-class data_load_util(object):
+class MetaLoader(object):
     def __init__(self, dataset):
         self.dataset = dataset
-        self.batch_size = 2
         
     def get_data_loader(self, loader):
-        # loader = DataLoader(dataset=self.dataset, batch_size=self.batch_size, shuffle=True, collate_fn=self.collater, drop_last=False)
         return self.get_BERT_iter(loader)
     
     def get_BERT_iter(self, iter_):
         """Wrapper around standard iterator which prepares each batch for BERT."""
         for batch in iter_:
-            batch = self.prepare_BERT_batch(batch)
+            batch = self.dataset.data.prepare_BERT_batch(batch,self.dataset.K)
             yield batch
-
-    def prepare_BERT_batch(self, batch):
-        """Prepare batch for BERT.
-        Adds the special tokens to input, creates the token_type_ids and attention mask tensors.
-        """
-        batch = batch
-        print(batch)
-        input_ids = []
-        token_type_ids = []
-        for i in range(self.batch_size):
-            seq_1 = batch['premise'][:,i].tolist()
-            seq_2 = batch['hypothesis'][:,i].tolist()
-            input_ids.append(self.dataset.vocab.tokenizer.build_inputs_with_special_tokens(seq_1, seq_2))
-            token_type_ids.append(self.dataset.vocab.tokenizer.create_token_type_ids_from_sequences(seq_1, seq_2))
-
-        input_ids = torch.LongTensor(input_ids)
-        attention_mask = (input_ids != self.dataset.vocab.pad_id).long()
-        token_type_ids = torch.LongTensor(token_type_ids)
-        labels = torch.LongTensor(batch['label'])
-        return (input_ids, token_type_ids, attention_mask, labels)
 
 
 #This is obsolete
@@ -189,7 +167,7 @@ class MNLI(Dataset):
         return len(self.data)
      
     @classmethod   
-    def read(cls, vocab = None, path = './multinli_1.0/', split='train',slice_=-1):
+    def read(cls, vocab = None, path = './multinli_1.0/', split='train', slice_=-1):
         if vocab == None:
             vocab = Vocab()
             flag = False    #set Flag = False to indicate that the vocab was not provided
@@ -226,6 +204,25 @@ class MNLI(Dataset):
         else:
             labels = {'neutral': 0, 'entailment': 1, 'contradiction': 2}
             return labels[sentence]
+    
+    def prepare_BERT_batch(self, batch, batch_size):
+        """Prepare batch for BERT.
+        Adds the special tokens to input, creates the token_type_ids and attention mask tensors.
+        """
+        batch = batch
+        input_ids = []
+        token_type_ids = []
+        for i in range(batch_size):
+            seq_1 = batch['premise'][:,i].tolist()
+            seq_2 = batch['hypothesis'][:,i].tolist()
+            input_ids.append(self.vocab.tokenizer.build_inputs_with_special_tokens(seq_1, seq_2))
+            token_type_ids.append(self.vocab.tokenizer.create_token_type_ids_from_sequences(seq_1, seq_2))
+
+        input_ids = torch.LongTensor(input_ids)
+        attention_mask = (input_ids != self.vocab.pad_id).long()
+        token_type_ids = torch.LongTensor(token_type_ids)
+        labels = torch.LongTensor(batch['label'])
+        return (input_ids, token_type_ids, attention_mask, labels)
 
 
 
@@ -237,6 +234,6 @@ if __name__ == "__main__":
     metadataset = MetaDataset.Initialize(train)
 
 
-    loader = data_load_util(metadataset).get_data_loader(metadataset.dataloaders()[0])
+    loader = MetaLoader(metadataset).get_data_loader(metadataset.dataloaders()[0])
     
     print(next(loader))
