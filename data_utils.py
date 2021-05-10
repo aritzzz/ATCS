@@ -70,8 +70,8 @@ class MetaLoader(object):
     def __init__(self, dataset):
         self.dataset = dataset
         
-    def get_data_loader(self, loader):
-        return self.get_BERT_iter(loader)
+    def get_data_loader(self, loaders):
+        return [self.get_BERT_iter(loader) for loader in loaders]
     
     def get_BERT_iter(self, iter_):
         """Wrapper around standard iterator which prepares each batch for BERT."""
@@ -112,7 +112,7 @@ class BaseDataset(Dataset):
         attention_mask = torch.LongTensor(attention_mask) #(input_ids != PAD_ID).long()
         token_type_ids = torch.LongTensor(token_type_ids)
         labels = torch.LongTensor(batch['label'])
-        return (input_ids, token_type_ids, attention_mask, labels)
+        return {"input_ids": input_ids, "token_type_ids": token_type_ids, "attention_mask": attention_mask, "labels": labels}
 
 class MNLI(BaseDataset):
     def __init__(self, data, labels):
@@ -192,6 +192,6 @@ if __name__ == "__main__":
     metadataset = MetaDataset.Initialize(train)
 
 
-    loader = MetaLoader(metadataset).get_data_loader(metadataset.dataloaders()[0])
+    loader = MetaLoader(metadataset).get_data_loader(metadataset.dataloaders()[i])
     
     print(next(loader))
