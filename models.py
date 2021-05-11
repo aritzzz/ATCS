@@ -8,7 +8,7 @@ class Classifier(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.encoder = BertModel.from_pretrained("bert-base-uncased")
-        self.mlp = nn.Linear(768, config['n_classes'])
+        # self.mlp = nn.Linear(768, config['n_classes'])
 
         if config['freeze_bert']:
             self.freeze_BERT()
@@ -22,7 +22,7 @@ class Classifier(nn.Module):
         x = self.encoder(x, 
                 token_type_ids=token_type_ids, 
                 attention_mask=attention_mask)["last_hidden_state"][:,0,:]
-        return self.mlp(x)
+        return x #self.mlp(x)
 
     def init_mlp(self):
         """Possibly useful for the PROTO-MAML implementation, will remove if not."""

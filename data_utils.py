@@ -11,6 +11,7 @@ from tqdm import tqdm
 import pickle
 from transformers import BertTokenizer, DataCollatorWithPadding
 from collections import defaultdict
+import random
 
 
 
@@ -52,7 +53,7 @@ class MetaDataset(Dataset):
             label = triple['label']
             rearrange_data[label].append(triple)
         rearrange_data = {key: SingletonDataset(value) for key, value in rearrange_data.items()}
-        self.meta_data = rearrange_data
+        self.meta_data = self.balance_data(rearrange_data)
         self.labels = list(rearrange_data.keys())
     
     def dataloaders(self):
@@ -63,6 +64,17 @@ class MetaDataset(Dataset):
         premise = TOKENIZER.pad([item['input'] for item in batch], padding=True)
         label = [item['label'] for item in batch]
         return {'input': premise, 'label': label}
+    
+    def balance_data(self, data):
+        lens = [len(v) for k,v in data.items()]
+        max_len = max(lens)
+        d = {}
+        for k, v in data.items():
+            difference = max_len - len(v)
+            sample = [random.choice(v) for _ in range(difference)]
+            v = v + sample
+            d[k] = v
+        return d
 
 
 
@@ -71,13 +83,20 @@ class MetaLoader(object):
         self.dataset = dataset
         
     def get_data_loader(self, loaders):
-        return [self.get_BERT_iter(loader) for loader in loaders]
+        return [loader for loader in loaders]
     
-    def get_BERT_iter(self, iter_):
-        """Wrapper around standard iterator which prepares each batch for BERT."""
-        for batch in iter_:
-            batch = self.dataset.data.prepare_BERT_batch(batch,self.dataset.K)
-            yield batch
+    # def get_BERT_iter(self, iter_):
+    #     """Wrapper around standard iterator which prepares each batch for BERT."""
+    #     for batch in iter_:
+    #         batch = self.dataset.data.prepare_BERT_batch(batch,self.dataset.K)
+    #         yield batch
+
+
+def collater(batch):
+        premise = TOKENIZER.pad([item['input'] for item in batch], padding=True)
+        label = [item['label'] for item in batch]
+        return {'input': premise, 'label': label}
+
 
 class BaseDataset(Dataset):
     def __init__(self, data, labels):
@@ -192,6 +211,6 @@ if __name__ == "__main__":
     metadataset = MetaDataset.Initialize(train)
 
 
-    loader = MetaLoader(metadataset).get_data_loader(metadataset.dataloaders()[i])
+    # loader = MetaLoader(metadataset).get_data_loader(metadataset.dataloaders()[i])
     
-    print(next(loader))
+    # print(next(loader))
