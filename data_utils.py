@@ -2,8 +2,7 @@ from __future__ import division
 import os
 import torch
 import torch.nn as nn
-from torch.utils.data import Dataset, DataLoader
-from nltk import word_tokenize
+from torch.utils.data import Dataset, DataLoader 
 from torch.nn.utils.rnn import pad_sequence
 import json
 import pandas as pd
@@ -131,7 +130,7 @@ class BaseDataset(Dataset):
         attention_mask = torch.LongTensor(attention_mask) #(input_ids != PAD_ID).long()
         token_type_ids = torch.LongTensor(token_type_ids)
         labels = torch.LongTensor(batch['label'])
-        return {"input_ids": input_ids, "token_type_ids": token_type_ids, "attention_mask": attention_mask, "labels": labels}
+        return (input_ids, token_type_ids, attention_mask, labels)
 
 class MNLI(BaseDataset):
     def __init__(self, data, labels):
@@ -161,7 +160,32 @@ class MNLI(BaseDataset):
                         )
         return cls(data, labels)
     
-    
+
+class ParaphraseDataset(BaseDataset):
+    def __init__(self, data):
+        super(BaseDataset, self).__init__()
+        self.data = data
+
+    @classmethod
+    def read(cls, path='./data/msrp/', split='train', slice_=-1):
+        split_path = os.path.join(path, 'msr_paraphrase_' + split + '.txt')
+
+        data = []
+        with open(split_path, 'r') as f:
+            lines = f.readlines()[1:slice_]
+        pbar = tqdm(lines)
+        for line in pbar:
+            pbar.set_description("Reading and Preparing dataset...")
+            attributes = line.lower().replace("\n", "").split("\t")
+            label_ = int(attributes[0])
+            sent1 = attributes[-2]
+            sent2 = attributes[-1]
+            data.append(
+                        {"label":label_, 
+                        "input":MNLI.preprocess((sent1, sent2))}
+                    )
+        return cls(data)
+
 
 class StanceDataset(BaseDataset):
     def __init__(self, data, labels):
@@ -196,21 +220,35 @@ class StanceDataset(BaseDataset):
 
 if __name__ == "__main__":
 
-    # train = MNLI.read(path='./multinli_1.0/', split='train', slice_=1000)
+     #train = MNLI.read(path='.data/multinli/multinli_1.0/', split='train', slice_=1000)
 
-    # metadataset = MetaDataset.Initialize(train)
+     #metadataset = MetaDataset.Initialize(train)
 
 
-    # loader = MetaLoader(metadataset).get_data_loader(metadataset.dataloaders()[0])
+     #loader = MetaLoader(metadataset).get_data_loader(metadataset.dataloaders()[0])
     
-    # print(next(loader))
+     #print(next(loader))
 
 
-    train = StanceDataset.read(split='train', slice_=1000)
+    #train = StanceDataset.read(path="data/Stance/", split='train', slice_=1000)
 
-    metadataset = MetaDataset.Initialize(train)
+    #metadataset = MetaDataset.Initialize(train)
 
 
+<<<<<<< HEAD
     # loader = MetaLoader(metadataset).get_data_loader(metadataset.dataloaders()[i])
     
     # print(next(loader))
+=======
+    #loader = MetaLoader(metadataset).get_data_loader(metadataset.dataloaders()[0])
+    
+    #print(next(loader))
+
+    train = ParaphraseDataset.read(path="data/msrp/", split="train", slice_=1000)
+
+    metadataset = MetaDataset.Initialize(train)
+
+    loader = MetaLoader(metadataset).get_data_loader(metadataset.dataloaders()[0])
+
+    print(next(loader))
+>>>>>>> e8634d866d5c2cd8e4eb843162156cb3b95fff2f
