@@ -1,6 +1,7 @@
 import copy
 import torch
 import torch.nn as nn
+from tqdm import tqdm
 from data_utils import *
 from models import Classifier
 from collections import defaultdict
@@ -8,14 +9,21 @@ from collections import defaultdict
 class MetaTrainer(object):
 
 
-    def __init__(self, model, train_loaders, meta_loaders, val_loaders, num_episodes):
+    def __init__(self, model, train_datasets, val_datasets, num_episodes):
         self.outer_model = model 
-        self.train_loaders = train_loaders #dataloaders for each of the meta-task
-        #trainloader for a task contains n trainloaders where n is the number of classes
-        self.val_loaders = val_loaders
-        self.meta_loaders = meta_loaders
+        self.n_tasks = num_episodes
+        self.train_datasets = train_datasets
+        self.valid_datasets = val_datasets
+
+        self.train_loaders = defaultdict(lambda: [])
+        self.valid_loaders = defaultdict(lambda: [])
+        for task in range(self.n_tasks):
+            self.train_loaders[task] = self._initialize_loaders(task)
+
+        for task in range(self.n_tasks):
+            self.valid_loaders[task] = self._initialize_loaders(task, valid=True)
+
         self.num_episodes = num_episodes
-        self.n_tasks = len(self.train_loaders)
         self.device = torch.device("cpu")
         self.loss_funcs = {
                     0: nn.CrossEntropyLoss(),
@@ -23,31 +31,35 @@ class MetaTrainer(object):
                     2: nn.CrossEntropyLoss()
                 }
         self.task_classes = {
-                    0: 2,
+                    0: 3,
                     1: 2,
                     2: 2
                 }
         self.outer_optimizer = torch.optim.AdamW(self.outer_model.encoder.parameters(),
                                                 weight_decay=1e-4)
     
+    def _initialize_loaders(self, task, valid=False):
+        if not valid:
+            return self.train_datasets[task].get_dataloaders()
+        else:
+            return self.valid_datasets[task].get_dataloaders()
+
+
     def train(self):
         """Run episodes and perform outerloop updates """
         for epoch in range(3):
             self.outer_optimizer.zero_grad()
             for episode in range(self.num_episodes):
                 print("---- Starting episode {} of epoch {} ----".format(episode, epoch))
-                self.train_episode(episode)
+                support_set, query_set = self.sample()
+                self.train_episode(support_set, query_set, episode)
             self.outer_optimizer.step()
 
 
     def forward(self, model, batch):
-        batch_ = batch['input']
-        input_ids = self._to_device(batch_['input_ids'])
-        token_type_ids = self._to_device(batch_['token_type_ids'])
-        attention_mask = self._to_device(batch_['attention_mask'])
-        logits = model(input_ids,
-                    token_type_ids=token_type_ids,
-                    attention_mask=attention_mask)
+        logits = model(batch['input_ids'],
+                    token_type_ids=batch['token_type_ids'],
+                    attention_mask=batch['attention_mask'])
         return logits
 
     def _to_device(self, inp):
@@ -55,37 +67,68 @@ class MetaTrainer(object):
             inp = torch.tensor(inp)
         return inp.to(self.device)
 
+
+    def sample(self):
+        """sample support set and query set for each episode
+            returns:
+            source_set: {task1: {class_1: {}, class_2: {}...}, task2: ...}
+            query_set: {task1: {class_1: {}, class_2: {}...}, task2: ...}
+    """
+        source_set = defaultdict(lambda: {})
+        query_set = defaultdict(lambda: {})
+        for task in range(self.n_tasks):
+            dl = self.train_loaders[task]
+            source_task_batch = {}
+            for i, loader in enumerate(dl):
+                b = next(loader, -1)
+                if b == -1:
+                    self.train_loaders[task] = self._initialize_loaders(task)
+                    b = next(self.train_loaders[task][i], -1)
+                label = b["labels"][0].item()
+                source_task_batch[label] = b
+            source_set[task] = source_task_batch
+
+        for task in range(self.n_tasks):
+            dl = self.valid_loaders[task]
+            query_task_batch = {}
+            for i, loader in enumerate(dl):
+                b = next(loader, -1)
+                if b == -1:
+                    self.valid_loaders[task] = self._initialize_loaders(task, valid=True)
+                    b = next(self.valid_loaders[task][i], -1)
+                label = b["labels"][0].item()
+                query_task_batch[label] = b
+            query_set[task] = query_task_batch
+        return source_set, query_set
    
-    def init_prototype_parameters(self, model, task):
+    def init_prototype_parameters(self, model, support_set, task):
         n_classes = self.task_classes[task]
-        prototypes = {i: [] for i in range(n_classes)}
-        for loader in self.meta_loaders[task]:
-            for i, batch in enumerate(loader):
-                batch_ = batch['input']
-                input_ids = self._to_device(batch_['input_ids'])
-                token_type_ids = self._to_device(batch_['token_type_ids'])
-                attention_mask = self._to_device(batch_['attention_mask'])
+        prototypes = torch.zeros((n_classes, 768))
+        n_classes = self.task_classes[task]
+        ## WARNING: this only works for 1 batch per class for now.
+        for label in support_set[task].keys():
+            batch = support_set[task][label]
+            input_ids = self._to_device(batch['input_ids'])
+            token_type_ids = self._to_device(batch['token_type_ids'])
+            attention_mask = self._to_device(batch['attention_mask'])
         
-                encoding = self.outer_model.encoder(input_ids,
-                                    token_type_ids=token_type_ids,
-                                    attention_mask=attention_mask)["last_hidden_state"][:,0,:]
-                label = batch['label'][0]
-                prototypes[label].append(encoding)
-        
-        tmp = torch.zeros((n_classes, 768))
-        for label, proto in prototypes.items():
-            tmp[label,:] = torch.mean(torch.cat(proto, dim=0), dim=0)
-        
-        model.gamma = tmp
+            encoding = self.outer_model.encoder(input_ids,
+                                token_type_ids=token_type_ids,
+                                attention_mask=attention_mask)["last_hidden_state"][:,0,:]
+            prototypes[label, :] = torch.mean(encoding, dim=0)
+       
+        model.gamma = prototypes
         
 
-    def inner_loop(self, model, task):
+    def inner_loop(self, model, support_set, task):
         loss_func = self.loss_funcs[task]
+        n_classes = self.task_classes[task]
         model.zero_grad()
         optimizer = torch.optim.AdamW(model.parameters(), lr=0.1, weight_decay=1e-4)
         
-        for batch in self.train_loaders[task]:
-            labels = self._to_device(batch['label'])
+        batches = [support_set[task][c] for c in range(n_classes)]
+        for batch in batches:
+            labels = self._to_device(batch['labels'])
             optimizer.zero_grad()
             logits = self.forward(model, batch)
             
@@ -94,19 +137,22 @@ class MetaTrainer(object):
             optimizer.step()
 
     
-    def calc_validation_grads(self, model, task):
+    def calc_validation_grads(self, model, query_set, task):
         loss_func = self.loss_funcs[task]
+        n_classes = self.task_classes[task]
         predictions = []
         all_labels = []
-        for i, batch in enumerate(self.val_loaders[task]):
-            labels = batch[-1]
+        
+        batches = [query_set[task][c] for c in range(n_classes)]
+        for batch in batches:
+            labels = self._to_device(batch["labels"])
             logits = self.forward(model, batch)
 
             predictions.append(logits)
-            all_labels.append(torch.unsqueeze(labels, dim=0))
+            all_labels.append(labels)
         
         predictions = torch.cat(predictions, dim=0)
-        all_labels = torch.cat(all_labels).squeeze()
+        all_labels = torch.cat(all_labels, dim=0)
 
         loss = loss_func(predictions, all_labels)
 
@@ -129,7 +175,7 @@ class MetaTrainer(object):
                 param.grad += grads_inner_model[i] + grads_outer_model[i]
 
     
-    def train_episode(self, task):
+    def train_episode(self, support_set, query_set, task):
         "train inner model for 1 step, returns gradients of encoder on support set."
         n_classes = self.task_classes[task]
         loss_func = self.loss_funcs[task]
@@ -139,21 +185,21 @@ class MetaTrainer(object):
 
         # Step 3: Init prototype vectors (for now just take n embedding vectors).
         print("---- Initializing prototype parameters ----")
-        self.init_prototype_parameters(inner_model, task)
+        self.init_prototype_parameters(inner_model, support_set, task)
 
         # Step 4: Init output parameters (phi).
         inner_model.init_phi(n_classes)
 
         # Step 5: perform k inner loop steps.
         print("---- Performing inner loop updates ----")
-        self.inner_loop(inner_model, task)
+        self.inner_loop(inner_model, support_set, task)
             
         # Step 6: Replace output parameters with trick.
         inner_model.replace_phi()
 
         # Step 7: Apply trained model on query set.
         print("---- Calculating gradients on query set ----")
-        self.calc_validation_grads(inner_model, task)
+        self.calc_validation_grads(inner_model, query_set, task)
 
 
 
@@ -162,28 +208,25 @@ if __name__ == "__main__":
     config = {'freeze_bert': False}
     model = Classifier(config)
 
-    SDtrain = StanceDataset.read(path='data/Stance/', split='train', slice_=100)
-    SDload = DataLoader(SDtrain, batch_size=32, collate_fn=collater)
-    SDmetadataset = MetaDataset.Initialize(SDtrain)
-    SDloaders = MetaLoader(SDmetadataset).get_data_loader(SDmetadataset.dataloaders())
+    para_train = ParaphraseDataset.read(path='data/msrp/', split='train', slice_=100)
+    para_metadataset = MetaDataset.Initialize(para_train, K=10)
+    para_dev = ParaphraseDataset.read(path='data/msrp/', split='test', slice_=16)
+    para_metadev = MetaDataset.Initialize(para_dev, K=6)
 
-    SDdev = StanceDataset.read(path='data/Stance/', split='test', slice_=1000)
-    SDmetadev = MetaDataset.Initialize(SDdev, K=1)
-    SDloadersdev = MetaLoader(SDmetadev).get_data_loader(SDmetadev.dataloaders())
+    mnlitrain = MNLI.read(path='data/multinli_1.0/', split='train', slice_=100)
+    mnli_metadataset = MetaDataset.Initialize(mnlitrain, K=10)
+    mnlidev = MNLI.read(path='data/multinli_1.0/', split='dev_matched', slice_=100)
+    mnli_metadev = MetaDataset.Initialize(mnlidev, K=6)
     
      
     meta_trainer = MetaTrainer(
                             model = model,
-                            train_loaders = [SDload],
-                            meta_loaders = [SDloaders],
-                            val_loaders = [SDloadersdev],
-                            num_episodes = 1
+                            train_datasets = [mnli_metadataset, para_metadataset],
+                            val_datasets = [mnli_metadev, para_metadev],
+                            num_episodes = 2
                             )
     
     meta_trainer.train()
-    
-    
-    
     
     
     
