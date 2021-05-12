@@ -28,7 +28,7 @@ class EpisodeDataLoader(IterableDataset):
     
   def _get_iter(self, dataset, support=True):
     split = 'train' if support else 'val'
-    return DataLoader(dataset.get_iter(split), batch_size=self.k)
+    return dataset.get_iter(split)
   
   @classmethod
   def create_dataloader(cls, k, datasets, batch_size):
@@ -45,4 +45,6 @@ if __name__ == "__main__":
   for batch in dataloader:
     # print(batch)
     print('-'*40)
-    print(batch[0]) 
+    for x in batch[0]:
+      print(list(x))
+    break
