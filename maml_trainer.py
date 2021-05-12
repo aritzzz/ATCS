@@ -71,8 +71,6 @@ class MetaTrainer(object):
                                     attention_mask=attention_mask)["last_hidden_state"][:,0,:]
                 label = batch['label'][0]
                 prototypes[label].append(encoding)
-
-                encoding.backward()
         
         tmp = torch.zeros((n_classes, 768))
         for label, proto in prototypes.items():
