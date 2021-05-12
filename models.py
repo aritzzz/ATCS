@@ -36,7 +36,7 @@ class Classifier(nn.Module):
         x = self.encoder(x, 
                 token_type_ids=token_type_ids, 
                 attention_mask=attention_mask)["last_hidden_state"][:,0,:]
-        return self.phi(x)
+        return x #self.phi(x)
 
     def init_phi(self, n_classes):
         self.phi = nn.Linear(768, n_classes)

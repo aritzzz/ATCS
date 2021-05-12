@@ -3,6 +3,7 @@ import os
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader 
+from torch.utils.data import IterableDataset, Sampler
 from torch.nn.utils.rnn import pad_sequence
 import json
 import pandas as pd
@@ -55,9 +56,9 @@ class MetaDataset(Dataset):
         self.meta_data = self.balance_data(rearrange_data)
         self.labels = list(rearrange_data.keys())
     
-    def dataloaders(self):
+    def get_dataloaders(self):
         #return as many dataloaders as the number of classes in the data
-        return [DataLoader(dataset, batch_size=self.K, collate_fn=self.collater) for dataset in self.meta_data.values()]
+        return [self.sampler(DataLoader(dataset, batch_size=self.K, collate_fn=self.collater)) for dataset in self.meta_data.values()]
 
     def collater(self, batch):
         premise = TOKENIZER.pad([item['input'] for item in batch], padding=True)
@@ -74,21 +75,28 @@ class MetaDataset(Dataset):
             v = v + sample
             d[k] = v
         return d
-
-
-
-class MetaLoader(object):
-    def __init__(self, dataset):
-        self.dataset = dataset
-        
-    def get_data_loader(self, loaders):
-        return [loader for loader in loaders]
     
-    # def get_BERT_iter(self, iter_):
-    #     """Wrapper around standard iterator which prepares each batch for BERT."""
-    #     for batch in iter_:
-    #         batch = self.dataset.data.prepare_BERT_batch(batch,self.dataset.K)
-    #         yield batch
+    def sampler(self, iter_):
+        for batch in iter_:
+            batch = self.data.prepare_BERT_batch(batch,self.K)
+            yield batch
+
+
+
+
+
+# class MetaLoader(object):
+#     def __init__(self, dataset):
+#         self.dataset = dataset
+        
+#     def get_data_loader(self, loaders):
+#         return [self.get_BERT_iter(loader) for loader in loaders]
+    
+#     def get_BERT_iter(self, iter_):
+#         """Wrapper around standard iterator which prepares each batch for BERT."""
+#         for batch in iter_:
+#             batch = self.dataset.data.prepare_BERT_batch(batch,self.dataset.K)
+#             yield batch
 
 
 def collater(batch):
@@ -130,7 +138,7 @@ class BaseDataset(Dataset):
         attention_mask = torch.LongTensor(attention_mask) #(input_ids != PAD_ID).long()
         token_type_ids = torch.LongTensor(token_type_ids)
         labels = torch.LongTensor(batch['label'])
-        return (input_ids, token_type_ids, attention_mask, labels)
+        return {"input_ids": input_ids, "token_type_ids": token_type_ids, "attention_mask": attention_mask, "labels": labels}
 
 class MNLI(BaseDataset):
     def __init__(self, data, labels):
@@ -220,14 +228,24 @@ class StanceDataset(BaseDataset):
 
 if __name__ == "__main__":
 
-     #train = MNLI.read(path='.data/multinli/multinli_1.0/', split='train', slice_=1000)
+    train = MNLI.read(path='./multinli_1.0/', split='train', slice_=1000)
 
-     #metadataset = MetaDataset.Initialize(train)
+    metadataset = MetaDataset.Initialize(train)
 
 
-     #loader = MetaLoader(metadataset).get_data_loader(metadataset.dataloaders()[0])
+    loader = metadataset.get_dataloaders()[0]
     
-     #print(next(loader))
+    count = 0
+    while True:
+        b = next(loader, -1)
+        print(b)
+        print(count, ": Ok")
+        if b == -1:
+            print("Oops! Loader exhausted. reinitializing...")
+            #reinitialize dataloader...
+            loader = metadataset.get_dataloaders()[0]
+        count+=1
+        break
 
 
     #train = StanceDataset.read(path="data/Stance/", split='train', slice_=1000)
@@ -235,20 +253,14 @@ if __name__ == "__main__":
     #metadataset = MetaDataset.Initialize(train)
 
 
-<<<<<<< HEAD
-    # loader = MetaLoader(metadataset).get_data_loader(metadataset.dataloaders()[i])
-    
-    # print(next(loader))
-=======
     #loader = MetaLoader(metadataset).get_data_loader(metadataset.dataloaders()[0])
     
     #print(next(loader))
 
-    train = ParaphraseDataset.read(path="data/msrp/", split="train", slice_=1000)
+    # train = ParaphraseDataset.read(path="data/msrp/", split="train", slice_=1000)
 
-    metadataset = MetaDataset.Initialize(train)
+    # metadataset = MetaDataset.Initialize(train)
 
-    loader = MetaLoader(metadataset).get_data_loader(metadataset.dataloaders()[0])
+    # loader = MetaLoader(metadataset).get_data_loader(metadataset.dataloaders()[0])
 
-    print(next(loader))
->>>>>>> e8634d866d5c2cd8e4eb843162156cb3b95fff2f
+    # print(next(loader))

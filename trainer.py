@@ -9,23 +9,77 @@ import torch.nn as nn
 
 
 class MetaTrainer(object):
-    def __init__(self, model, meta_loaders, train_loaders, val_loaders, num_episodes):
-        self.base_model = model 
-        self.train_loaders = train_loaders
-        self.meta_loaders = meta_loaders
-        self.val_loaders = val_loaders
+    def __init__(self, model, train_datasets, valid_datasets, num_episodes):
+        self.base_model = model
+        self.train_datasets = train_datasets
+        self.valid_datasets = valid_datasets 
         self.num_episodes = num_episodes
-        self.n_tasks = len(self.train_loaders)
+        self.n_tasks = len(self.train_datasets)
+        # self.meta_loaders = meta_loaders
+
+        self.train_loaders = defaultdict(lambda: [])
+        self.valid_loaders = defaultdict(lambda: [])
+        for task in range(self.n_tasks):
+            self.train_loaders[task] = self._initialize_loaders(task)
+        
+        for task in range(self.n_tasks):
+            self.valid_loaders[task] = self._initialize_loaders(task, valid=True)
+
         self.inner_loop_updates = 1
         self.device = 'cpu'
         self.criterion = nn.CrossEntropyLoss() #It takes softmax internally
 
+
+    def _initialize_loaders(self, task, valid=False):
+        if not valid:
+            return self.train_datasets[task].get_dataloaders()
+        else:
+            return self.valid_datasets[task].get_dataloaders()
     
+
+    def sample(self):
+        """sample support set and query set for each episode
+            returns:
+            source_set: {task1: {class_1: {}, class_2: {}...}, task2: ...}
+            query_set: {task1: {class_1: {}, class_2: {}...}, task2: ...}
+    """
+        source_set = defaultdict(lambda: {})
+        query_set = defaultdict(lambda: {})
+        for task in range(self.n_tasks):
+            dl = self.train_loaders[task]
+            source_task_batch = {}
+            for i, loader in enumerate(dl):
+                b = next(loader, -1)
+                if b == -1:
+                    self.train_loaders[task] = self._initialize_loaders(task)
+                    b = next(self.train_loaders[task][i], -1)
+                label = b["labels"][0].item()
+                source_task_batch[label] = b
+            source_set[task] = source_task_batch
+
+        for task in range(self.n_tasks):
+            dl = self.valid_loaders[task]
+            query_task_batch = {}
+            for i, loader in enumerate(dl):
+                b = next(loader, -1)
+                if b == -1:
+                    self.valid_loaders[task] = self._initialize_loaders(task, valid=True)
+                    b = next(self.valid_loaders[task][i], -1)
+                label = b["labels"][0].item()
+                query_task_batch[label] = b
+            query_set[task] = query_task_batch
+        return source_set, query_set
+
+
     def train(self):
-         for episode in range(self.num_episodes):
-            for task in range(self.n_tasks):
-                self.inner_loop(task)
-                break
+        for episode in range(100):
+            source, query = self.sample()
+            print("-----episode----- {}".format(episode))
+            print(source, query)
+        #  for episode in range(self.num_episodes):
+        #     for task in range(self.n_tasks):
+        #         self.inner_loop(task)
+        #         break
 
 
     def inner_loop(self, task):
@@ -41,7 +95,12 @@ class MetaTrainer(object):
                 print(loss)
                 break
         
-             
+    def _init_prototype_parameters(self, prototypes):
+        input_ids, token_type_ids, attention_mask, _ = batch
+        model.gamma = self.outer_model.encoder(input_ids,
+                                    token_type_ids=token_type_ids,
+                                    attention_mask=attention_mask)["last_hidden_state"][:n,0,:]
+
     def _get_loss(self, predictions, true):
         return self.criterion(predictions, true)
 
@@ -86,27 +145,25 @@ class MetaTrainer(object):
 if __name__ == "__main__":
     mnlitrain = MNLI.read(path='./multinli_1.0/', split='train', slice_=100)
 
-    mnliload = DataLoader(mnlitrain, batch_size=32, collate_fn=collater)
+    # mnliload = DataLoader(mnlitrain, batch_size=32, collate_fn=collater)
 
 
     mnlimetadataset = MetaDataset.Initialize(mnlitrain)
-    mnliloaders = MetaLoader(mnlimetadataset).get_data_loader(mnlimetadataset.dataloaders())
 
-    # mnlidev = MNLI.read(path='./multinli_1.0/', split='dev_matched', slice_=1000)
-    # mnlimetadev = MetaDataset.Initialize(mnlidev, K=1)
-    # mnliloadersdev = mnlimetadev.dataloaders()
+    mnlidev = MNLI.read(path='./multinli_1.0/', split='dev_matched', slice_=1000)
+    mnlimetadev = MetaDataset.Initialize(mnlidev, K=1)
 
 
     SDtrain = StanceDataset.read(split='train', slice_=100)
 
-    SDload = DataLoader(SDtrain, batch_size=32, collate_fn=collater)
+    # SDload = DataLoader(SDtrain, batch_size=32, collate_fn=collater)
 
     SDmetadataset = MetaDataset.Initialize(SDtrain)
-    SDloaders = MetaLoader(SDmetadataset).get_data_loader(SDmetadataset.dataloaders())
+    
 
 
-    # SDdev = StanceDataset.read(split='test', slice_=1000)
-    # SDmetadev = MetaDataset.Initialize(SDdev, K=1)
+    SDdev = StanceDataset.read(split='test', slice_=1000)
+    SDmetadev = MetaDataset.Initialize(SDdev, K=1)
     # SDloadersdev = MetaLoader().get_data_loaderSDmetadev.dataloaders()
 
 
@@ -116,9 +173,8 @@ if __name__ == "__main__":
 
     meta_trainer = MetaTrainer(
                                 model = model,
-                                train_loaders = [mnliload, SDload],
-                                meta_loaders = [mnliloaders, SDloaders],
-                                val_loaders = None, #[mnliloadersdev, SDloadersdev],
+                                train_datasets = [mnlimetadataset, SDmetadataset],
+                                valid_datasets = [mnlimetadev, SDdev],
                                 num_episodes = 1
                             )
     
