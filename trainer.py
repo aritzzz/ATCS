@@ -71,9 +71,27 @@ class MetaTrainer(object):
         return source_set, query_set
 
 
+    def _extract(self, batch):
+        shape = [batch[class_]["input_ids"].shape[1] for class_ in batch.keys()]
+        max_shape = max(shape)
+        input_ids = torch.cat(tuple([self._pad(batch[class_]["input_ids"], max_shape) for class_ in batch.keys()]), dim=0)
+        token_type_ids = torch.cat(tuple([self._pad(batch[class_]["token_type_ids"], max_shape) for class_ in batch.keys()]), dim=0)
+        attention_mask = torch.cat(tuple([self._pad(batch[class_]["attention_mask"], max_shape) for class_ in batch.keys()]), dim=0)
+        labels = torch.cat(tuple([batch[class_]["labels"] for class_ in batch.keys()]))
+
+        shuffle_indices = torch.randperm(labels.shape[0])
+        return input_ids[shuffle_indices], token_type_ids[shuffle_indices], attention_mask[shuffle_indices], labels[shuffle_indices]
+
+    def _pad(self, tensor, max_shape):
+        tensor = torch.nn.functional.pad(tensor, (0, max_shape - tensor.shape[1]), mode='constant', value=PAD_ID).detach()
+        return tensor
+
+
     def train(self):
         for episode in range(100):
             source, query = self.sample()
+            self._extract(source[0])
+            break
             print("-----episode----- {}".format(episode))
             print(source)
         #  for episode in range(self.num_episodes):
