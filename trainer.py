@@ -75,7 +75,7 @@ class MetaTrainer(object):
         for episode in range(100):
             source, query = self.sample()
             print("-----episode----- {}".format(episode))
-            print(source, query)
+            print(source)
         #  for episode in range(self.num_episodes):
         #     for task in range(self.n_tasks):
         #         self.inner_loop(task)
@@ -150,7 +150,7 @@ if __name__ == "__main__":
 
     mnlimetadataset = MetaDataset.Initialize(mnlitrain)
 
-    mnlidev = MNLI.read(path='./multinli_1.0/', split='dev_matched', slice_=1000)
+    mnlidev = MNLI.read(path='./multinli_1.0/', split='dev_matched', slice_=100)
     mnlimetadev = MetaDataset.Initialize(mnlidev, K=1)
 
 
@@ -162,7 +162,7 @@ if __name__ == "__main__":
     
 
 
-    SDdev = StanceDataset.read(split='test', slice_=1000)
+    SDdev = StanceDataset.read(split='test', slice_=100)
     SDmetadev = MetaDataset.Initialize(SDdev, K=1)
     # SDloadersdev = MetaLoader().get_data_loaderSDmetadev.dataloaders()
 
@@ -174,7 +174,7 @@ if __name__ == "__main__":
     meta_trainer = MetaTrainer(
                                 model = model,
                                 train_datasets = [mnlimetadataset, SDmetadataset],
-                                valid_datasets = [mnlimetadev, SDdev],
+                                valid_datasets = [mnlimetadev, SDmetadev],
                                 num_episodes = 1
                             )
     

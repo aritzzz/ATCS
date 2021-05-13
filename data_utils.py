@@ -58,7 +58,7 @@ class MetaDataset(Dataset):
     
     def get_dataloaders(self):
         #return as many dataloaders as the number of classes in the data
-        return [self.sampler(DataLoader(dataset, batch_size=self.K, collate_fn=self.collater)) for dataset in self.meta_data.values()]
+        return [self.sampler(DataLoader(dataset, batch_size=self.K, collate_fn=self.collater, shuffle=True)) for dataset in self.meta_data.values()]
 
     def collater(self, batch):
         premise = TOKENIZER.pad([item['input'] for item in batch], padding=True)
