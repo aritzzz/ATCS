@@ -10,9 +10,9 @@ from collections import defaultdict
 class MetaTrainer(object):
 
 
-    def __init__(self, model, train_datasets, val_datasets, 
+    def __init__(self, model, train_datasets, val_datasets,
             num_episodes, model_save_path, results_save_path):
-        self.outer_model = model 
+        self.outer_model = model
         self.n_tasks = num_episodes
         self.model_save_path = model_save_path
         self.results_save_path = results_save_path
@@ -46,7 +46,7 @@ class MetaTrainer(object):
                     "accuracy":defaultdict(list)}
         self.outer_results = {"losses":defaultdict(list),
                     "accuracy":defaultdict(list)}
-    
+
     def _initialize_loaders(self, task, valid=False):
         if not valid:
             return self.train_datasets[task].get_dataloaders()
@@ -72,9 +72,9 @@ class MetaTrainer(object):
 
 
     def forward(self, model, batch):
-        logits = model(batch['input_ids'],
-                    token_type_ids=batch['token_type_ids'],
-                    attention_mask=batch['attention_mask'])
+        logits = model(self._to_device(batch['input_ids']),
+                    token_type_ids=self._to_device(batch['token_type_ids']),
+                    attention_mask=self._to_device(batch['attention_mask']))
         return logits
 
     def _to_device(self, inp):
@@ -115,7 +115,7 @@ class MetaTrainer(object):
                 query_task_batch[label] = b
             query_set[task] = query_task_batch
         return source_set, query_set
-   
+
     def init_prototype_parameters(self, model, support_set, task):
         n_classes = self.task_classes[task]
         prototypes = torch.zeros((n_classes, 768))
@@ -126,12 +126,12 @@ class MetaTrainer(object):
             input_ids = self._to_device(batch['input_ids'])
             token_type_ids = self._to_device(batch['token_type_ids'])
             attention_mask = self._to_device(batch['attention_mask'])
-        
+
             encoding = self.outer_model.encoder(input_ids,
                                 token_type_ids=token_type_ids,
                                 attention_mask=attention_mask)["last_hidden_state"][:,0,:]
             prototypes[label, :] = torch.mean(encoding, dim=0)
-       
+
         model.gamma = prototypes
 
     def _extract(self, batch):
@@ -143,9 +143,9 @@ class MetaTrainer(object):
         labels = torch.cat(tuple([batch[class_]["labels"] for class_ in batch.keys()]))
 
         shuffle_indices = torch.randperm(labels.shape[0])
-        return {'input_ids': input_ids[shuffle_indices], 
-                'token_type_ids': token_type_ids[shuffle_indices], 
-                'attention_mask': attention_mask[shuffle_indices], 
+        return {'input_ids': input_ids[shuffle_indices],
+                'token_type_ids': token_type_ids[shuffle_indices],
+                'attention_mask': attention_mask[shuffle_indices],
                 'labels': labels[shuffle_indices]
                 }
 
@@ -159,42 +159,41 @@ class MetaTrainer(object):
         n_classes = self.task_classes[task]
         model.zero_grad()
         optimizer = torch.optim.AdamW(model.parameters(), lr=0.1, weight_decay=1e-4)
-        
+
         batch = self._extract(support_set[task])
         labels = self._to_device(batch['labels'])
         optimizer.zero_grad()
         logits = self.forward(model, batch)
-        
+
         loss = loss_func(logits, labels)
         accuracy = self.get_accuracy(logits, labels)
         self.inner_results["losses"][task].append(loss.item())
         self.inner_results["accuracy"][task].append(accuracy)
-        
+
         loss.backward()
         optimizer.step()
 
-    
+
     def get_accuracy(self, logits, labels):
         predictions = torch.argmax(logits, dim=1)
         return (predictions == labels).float().mean().item()
 
-    
+
     def calc_validation_grads(self, model, query_set, task):
         loss_func = self.loss_funcs[task]
         n_classes = self.task_classes[task]
-        predictions = []
-        all_labels = []
-        
-        batches = [query_set[task][c] for c in range(n_classes)]
-        for batch in batches:
-            labels = self._to_device(batch["labels"])
-            logits = self.forward(model, batch)
+        #predictions = []
+        #all_labels = []
 
-            predictions.append(logits)
-            all_labels.append(labels)
-        
-        predictions = torch.cat(predictions, dim=0)
-        all_labels = torch.cat(all_labels, dim=0)
+        batch = self._extract(query_set[task])
+        labels = self._to_device(batch["labels"])
+        logits = self.forward(model, batch)
+
+        #predictions.append(logits)
+        #all_labels.append(labels)
+
+        #predictions = torch.cat(predictions, dim=0)
+        #all_labels = torch.cat(all_labels, dim=0)
 
         loss = loss_func(predictions, all_labels)
         accuracy = self.get_accuracy(predictions, all_labels)
@@ -220,7 +219,7 @@ class MetaTrainer(object):
             else:
                 param.grad += grads_inner_model[i] + grads_outer_model[i]
 
-    
+
     def train_episode(self, support_set, query_set, task):
         "train inner model for 1 step, returns gradients of encoder on support set."
         n_classes = self.task_classes[task]
@@ -239,7 +238,7 @@ class MetaTrainer(object):
         # Step 5: perform k inner loop steps.
         print("---- Performing inner loop updates ----")
         self.inner_loop(inner_model, support_set, task)
-            
+
         # Step 6: Replace output parameters with trick.
         inner_model.replace_phi()
 
@@ -250,14 +249,14 @@ class MetaTrainer(object):
 
 
 if __name__ == "__main__":
-    
+
     config = {'freeze_bert': False}
     model = Classifier(config)
 
     para_train_support, para_train_query = ParaphraseDataset.read(path='data/msrp/', split='train', slice_=1000)
     para_train_support_metaset = MetaDataset.Initialize(para_train_support, K=10)
     para_train_query_metaset = MetaDataset.Initialize(para_train_query, K=6)
-    
+
     #para_test_support, para_query = ParaphraseDataset.read(path='data/msrp/', split='test', slice_=16)
     #para_test_support_metaset = MetaDataset.Initialize(para_test_support, K=10)
     #para_test_query_metaset = MetaDataset.Initialize(para_test_query, K=6)
@@ -270,28 +269,28 @@ if __name__ == "__main__":
     #mnli_test_support, mnli_test_query = MNLI.read(path='data/multinli_1.0/', split='dev_mismatched',slice_=100)
     #mnli_test_support_metaset = MetaDataset.Initialize(mnli_test_support, K=10)
     #mnli_test_query_metaset = MetaDataset.Initialize(mnli_test_query, K=10)
-    
-     
+
+
     meta_trainer = MetaTrainer(
                             model = model,
-                            train_datasets = [mnli_train_support_metaset, 
+                            train_datasets = [mnli_train_support_metaset,
                                             para_train_support_metaset],
-                            val_datasets = [mnli_train_query_metaset, 
+                            val_datasets = [mnli_train_query_metaset,
                                             para_train_query_metaset],
                             num_episodes = 2,
                             model_save_path = "saved_models/para_mnli.pt",
                             results_save_path = "results/para_mnli.txt"
                             )
-    
+
     meta_trainer.train()
-    
-    
-    
+
+
+
     #datasetloader = EpisodeDataLoader.create_dataloader(k=8, datasets=[
     #        ParaphraseDataset(batch_size=8),
     #        StanceDataset(batch_size=8)
     #    ], batch_size=16)
-    
+
    # datasetloader = EpisodeDataLoader(k=8, datasets=[
    #         StanceDataset(batch_size=8)
    #     ], batch_size=16)
@@ -301,7 +300,7 @@ if __name__ == "__main__":
 
    # stance_train = datasetloader._get_iter(datasetloader.datasets[1], support=True)
    # stance_dev = datasetloader._get_iter(datasetloader.datasets[1], support=False)
-   
+
    # SDmetadataset = MetaDataset.Initialize(stance_train)
    # SDloaders = MetaLoader(SDmetadataset).get_data_loader(SDmetadataset.dataloaders())
 
@@ -314,5 +313,5 @@ if __name__ == "__main__":
    #                             val_loaders = [stance_train],
    #                             num_episodes = 1
    #                         )
-    
+
     #meta_trainer.train()
