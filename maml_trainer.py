@@ -1,6 +1,7 @@
 import copy
 import torch
 import torch.nn as nn
+import json
 from tqdm import tqdm
 from data_utils import *
 from models import Classifier
@@ -9,9 +10,12 @@ from collections import defaultdict
 class MetaTrainer(object):
 
 
-    def __init__(self, model, train_datasets, val_datasets, num_episodes):
+    def __init__(self, model, train_datasets, val_datasets, 
+            num_episodes, model_save_path, results_save_path):
         self.outer_model = model 
         self.n_tasks = num_episodes
+        self.model_save_path = model_save_path
+        self.results_save_path = results_save_path
         self.train_datasets = train_datasets
         self.valid_datasets = val_datasets
 
@@ -37,6 +41,11 @@ class MetaTrainer(object):
                 }
         self.outer_optimizer = torch.optim.AdamW(self.outer_model.encoder.parameters(),
                                                 weight_decay=1e-4)
+
+        self.inner_results = {"losses":defaultdict(list),
+                    "accuracy":defaultdict(list)}
+        self.outer_results = {"losses":defaultdict(list),
+                    "accuracy":defaultdict(list)}
     
     def _initialize_loaders(self, task, valid=False):
         if not valid:
@@ -44,16 +53,22 @@ class MetaTrainer(object):
         else:
             return self.valid_datasets[task].get_dataloaders()
 
+    def dump_results(self):
+        with open(self.results_save_path, 'w') as f:
+            json.dump({"inner":self.inner_results, "outer": self.outer_results}, f)
 
     def train(self):
         """Run episodes and perform outerloop updates """
-        for epoch in range(3):
+        for epoch in range(1):
             self.outer_optimizer.zero_grad()
             for episode in range(self.num_episodes):
                 print("---- Starting episode {} of epoch {} ----".format(episode, epoch))
                 support_set, query_set = self.sample()
                 self.train_episode(support_set, query_set, episode)
             self.outer_optimizer.step()
+
+        self.dump_results()
+        torch.save(self.outer_model.state_dict(), self.model_save_path)
 
 
     def forward(self, model, batch):
@@ -151,8 +166,17 @@ class MetaTrainer(object):
         logits = self.forward(model, batch)
         
         loss = loss_func(logits, labels)
+        accuracy = self.get_accuracy(logits, labels)
+        self.inner_results["losses"][task].append(loss.item())
+        self.inner_results["accuracy"][task].append(accuracy)
+        
         loss.backward()
         optimizer.step()
+
+    
+    def get_accuracy(self, logits, labels):
+        predictions = torch.argmax(logits, dim=1)
+        return (predictions == labels).float().mean().item()
 
     
     def calc_validation_grads(self, model, query_set, task):
@@ -173,6 +197,10 @@ class MetaTrainer(object):
         all_labels = torch.cat(all_labels, dim=0)
 
         loss = loss_func(predictions, all_labels)
+        accuracy = self.get_accuracy(predictions, all_labels)
+        print("task: {}, query accuracy: {}, query loss: {}".format(task, accuracy, loss.item()))
+        self.outer_results["losses"][task].append(loss.item())
+        self.outer_results["accuracy"][task].append(accuracy)
 
         grads_inner_model = torch.autograd.grad(outputs=loss,
                                             inputs=model.encoder.parameters(),
@@ -226,22 +254,33 @@ if __name__ == "__main__":
     config = {'freeze_bert': False}
     model = Classifier(config)
 
-    para_train = ParaphraseDataset.read(path='data/msrp/', split='train', slice_=100)
-    para_metadataset = MetaDataset.Initialize(para_train, K=10)
-    para_dev = ParaphraseDataset.read(path='data/msrp/', split='test', slice_=16)
-    para_metadev = MetaDataset.Initialize(para_dev, K=6)
+    para_train_support, para_train_query = ParaphraseDataset.read(path='data/msrp/', split='train', slice_=1000)
+    para_train_support_metaset = MetaDataset.Initialize(para_train_support, K=10)
+    para_train_query_metaset = MetaDataset.Initialize(para_train_query, K=6)
+    
+    #para_test_support, para_query = ParaphraseDataset.read(path='data/msrp/', split='test', slice_=16)
+    #para_test_support_metaset = MetaDataset.Initialize(para_test_support, K=10)
+    #para_test_query_metaset = MetaDataset.Initialize(para_test_query, K=6)
 
-    mnlitrain = MNLI.read(path='data/multinli_1.0/', split='train', slice_=100)
-    mnli_metadataset = MetaDataset.Initialize(mnlitrain, K=10)
-    mnlidev = MNLI.read(path='data/multinli_1.0/', split='dev_matched', slice_=100)
-    mnli_metadev = MetaDataset.Initialize(mnlidev, K=6)
+    mnli_train_support = MNLI.read(path='data/multinli_1.0/', split='train', slice_=700)
+    mnli_train_support_metaset = MetaDataset.Initialize(mnli_train_support, K=10)
+    mnli_train_query = MNLI.read(path='data/multinli_1.0/', split='dev_matched', slice_=300)
+    mnli_train_query_metaset = MetaDataset.Initialize(mnli_train_query, K=6)
+
+    #mnli_test_support, mnli_test_query = MNLI.read(path='data/multinli_1.0/', split='dev_mismatched',slice_=100)
+    #mnli_test_support_metaset = MetaDataset.Initialize(mnli_test_support, K=10)
+    #mnli_test_query_metaset = MetaDataset.Initialize(mnli_test_query, K=10)
     
      
     meta_trainer = MetaTrainer(
                             model = model,
-                            train_datasets = [mnli_metadataset, para_metadataset],
-                            val_datasets = [mnli_metadev, para_metadev],
-                            num_episodes = 2
+                            train_datasets = [mnli_train_support_metaset, 
+                                            para_train_support_metaset],
+                            val_datasets = [mnli_train_query_metaset, 
+                                            para_train_query_metaset],
+                            num_episodes = 2,
+                            model_save_path = "saved_models/para_mnli.pt",
+                            results_save_path = "results/para_mnli.txt"
                             )
     
     meta_trainer.train()
