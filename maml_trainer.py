@@ -57,9 +57,9 @@ class MetaTrainer(object):
 
 
     def forward(self, model, batch):
-        logits = model(batch['input_ids'],
-                    token_type_ids=batch['token_type_ids'],
-                    attention_mask=batch['attention_mask'])
+        logits = model(self._to_device(batch['input_ids']),
+                    token_type_ids=self._to_device(batch['token_type_ids']),
+                    attention_mask=self._to_device(batch['attention_mask']))
         return logits
 
     def _to_device(self, inp):
@@ -158,21 +158,20 @@ class MetaTrainer(object):
     def calc_validation_grads(self, model, query_set, task):
         loss_func = self.loss_funcs[task]
         n_classes = self.task_classes[task]
-        predictions = []
-        all_labels = []
+        #predictions = []
+        #all_labels = []
         
-        batches = [query_set[task][c] for c in range(n_classes)]
-        for batch in batches:
-            labels = self._to_device(batch["labels"])
-            logits = self.forward(model, batch)
+        batch = self._extract(query_set[task])
+        labels = self._to_device(batch["labels"])
+        logits = self.forward(model, batch)
 
-            predictions.append(logits)
-            all_labels.append(labels)
+        #predictions.append(logits)
+        #all_labels.append(labels)
         
-        predictions = torch.cat(predictions, dim=0)
-        all_labels = torch.cat(all_labels, dim=0)
+        #predictions = torch.cat(predictions, dim=0)
+        #all_labels = torch.cat(all_labels, dim=0)
 
-        loss = loss_func(predictions, all_labels)
+        loss = loss_func(logits, labels) #predictions, all_labels)
 
         grads_inner_model = torch.autograd.grad(outputs=loss,
                                             inputs=model.encoder.parameters(),
