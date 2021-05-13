@@ -182,21 +182,13 @@ class MetaTrainer(object):
     def calc_validation_grads(self, model, query_set, task):
         loss_func = self.loss_funcs[task]
         n_classes = self.task_classes[task]
-        #predictions = []
-        #all_labels = []
 
         batch = self._extract(query_set[task])
         labels = self._to_device(batch["labels"])
         logits = self.forward(model, batch)
 
-        #predictions.append(logits)
-        #all_labels.append(labels)
-
-        #predictions = torch.cat(predictions, dim=0)
-        #all_labels = torch.cat(all_labels, dim=0)
-
-        loss = loss_func(predictions, all_labels)
-        accuracy = self.get_accuracy(predictions, all_labels)
+        loss = loss_func(logits, labels)
+        accuracy = self.get_accuracy(logits, labels)
         print("task: {}, query accuracy: {}, query loss: {}".format(task, accuracy, loss.item()))
         self.outer_results["losses"][task].append(loss.item())
         self.outer_results["accuracy"][task].append(accuracy)
