@@ -118,7 +118,26 @@ class MetaTrainer(object):
             prototypes[label, :] = torch.mean(encoding, dim=0)
        
         model.gamma = prototypes
-        
+
+    def _extract(self, batch):
+        shape = [batch[class_]["input_ids"].shape[1] for class_ in batch.keys()]
+        max_shape = max(shape)
+        input_ids = torch.cat(tuple([self._pad(batch[class_]["input_ids"], max_shape) for class_ in batch.keys()]), dim=0)
+        token_type_ids = torch.cat(tuple([self._pad(batch[class_]["token_type_ids"], max_shape) for class_ in batch.keys()]), dim=0)
+        attention_mask = torch.cat(tuple([self._pad(batch[class_]["attention_mask"], max_shape) for class_ in batch.keys()]), dim=0)
+        labels = torch.cat(tuple([batch[class_]["labels"] for class_ in batch.keys()]))
+
+        shuffle_indices = torch.randperm(labels.shape[0])
+        return {'input_ids': input_ids[shuffle_indices], 
+                'token_type_ids': token_type_ids[shuffle_indices], 
+                'attention_mask': attention_mask[shuffle_indices], 
+                'labels': labels[shuffle_indices]
+                }
+
+    def _pad(self, tensor, max_shape):
+        tensor = torch.nn.functional.pad(tensor, (0, max_shape - tensor.shape[1]), mode='constant', value=PAD_ID).detach()
+        return tensor
+
 
     def inner_loop(self, model, support_set, task):
         loss_func = self.loss_funcs[task]
@@ -126,15 +145,14 @@ class MetaTrainer(object):
         model.zero_grad()
         optimizer = torch.optim.AdamW(model.parameters(), lr=0.1, weight_decay=1e-4)
         
-        batches = [support_set[task][c] for c in range(n_classes)]
-        for batch in batches:
-            labels = self._to_device(batch['labels'])
-            optimizer.zero_grad()
-            logits = self.forward(model, batch)
-            
-            loss = loss_func(logits, labels)
-            loss.backward()
-            optimizer.step()
+        batch = self._extract(support_set[task])
+        labels = self._to_device(batch['labels'])
+        optimizer.zero_grad()
+        logits = self.forward(model, batch)
+        
+        loss = loss_func(logits, labels)
+        loss.backward()
+        optimizer.step()
 
     
     def calc_validation_grads(self, model, query_set, task):
