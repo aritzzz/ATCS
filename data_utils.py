@@ -2,6 +2,7 @@ from __future__ import division
 import os
 import torch
 import torch.nn as nn
+import numpy as np
 from torch.utils.data import Dataset, DataLoader 
 from torch.utils.data import IterableDataset, Sampler
 from torch.nn.utils.rnn import pad_sequence
@@ -175,7 +176,8 @@ class ParaphraseDataset(BaseDataset):
         self.data = data
 
     @classmethod
-    def read(cls, path='./data/msrp/', split='train', slice_=-1):
+    def read(cls, path='./data/msrp/', split='train', slice_=-1, ratio=1, random_seed=42):
+        np.random.seed(42)
         split_path = os.path.join(path, 'msr_paraphrase_' + split + '.txt')
 
         data = []
@@ -192,7 +194,15 @@ class ParaphraseDataset(BaseDataset):
                         {"label":label_, 
                         "input":MNLI.preprocess((sent1, sent2))}
                     )
-        return cls(data)
+        if ratio < 1:
+            np.random.shuffle(np.array(data))
+            n_train = int(len(data) * ratio)
+            train_data = data[:n_train]
+            dev_data = data[n_train:]
+
+            return cls(train_data), cls(dev_data)
+        else:
+            return cls(data)
 
 
 class StanceDataset(BaseDataset):
@@ -203,7 +213,7 @@ class StanceDataset(BaseDataset):
     
 
     @classmethod
-    def read(cls, path='./claim_stance/', split='train', slice_=-1):
+    def read(cls, path='./claim_stance/', split='train', slice_=-1, ratio=1, random_seed=42):
         split_path = os.path.join(path, 'claim_stance_dataset_v1' + '.csv')
         df = pd.read_csv(split_path)[["split", "topicText", "claims.claimCorrectedText", "claims.stance"]]
 
@@ -221,7 +231,17 @@ class StanceDataset(BaseDataset):
                         {'label':StanceDataset.preprocess(label_, labels=labels, label=True),
                         'input':StanceDataset.preprocess((sent1, sent2))}
                         )
-        return cls(data, labels)
+        if ratio < 1:
+            np.random.shuffle(np.array(data))
+            n_train = int(len(data) * ratio)
+            train_data = data[:n_train]
+            dev_data = data[n_train:]
+
+            return cls(train_data), cls(dev_data)
+        else:
+            return cls(data)
+
+
 
 
 
