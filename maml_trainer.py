@@ -10,7 +10,7 @@ from collections import defaultdict
 class MetaTrainer(object):
 
 
-    def __init__(self, model, train_datasets, val_datasets,
+    def __init__(self, model, train_datasets, val_datasets, test_datasets,
             num_episodes, model_save_path, results_save_path):
         self.outer_model = model
         self.n_tasks = num_episodes
@@ -18,14 +18,14 @@ class MetaTrainer(object):
         self.results_save_path = results_save_path
         self.train_datasets = train_datasets
         self.valid_datasets = val_datasets
+        self.test_datasets = test_datasets
 
         self.train_loaders = defaultdict(lambda: [])
         self.valid_loaders = defaultdict(lambda: [])
+        self.test_loaders = defaultdict(lambda: [])
         for task in range(self.n_tasks):
             self.train_loaders[task] = self._initialize_loaders(task)
-
-        for task in range(self.n_tasks):
-            self.valid_loaders[task] = self._initialize_loaders(task, valid=True)
+            self.valid_loaders[task] = self._initialize_loaders(task, type_="valid")
 
         self.num_episodes = num_episodes
         self.device = torch.device("cpu")
@@ -35,7 +35,7 @@ class MetaTrainer(object):
                     2: nn.CrossEntropyLoss()
                 }
         self.task_classes = {
-                    0: 3,
+                    0: 2,
                     1: 2,
                     2: 2
                 }
@@ -46,29 +46,41 @@ class MetaTrainer(object):
                     "accuracy":defaultdict(list)}
         self.outer_results = {"losses":defaultdict(list),
                     "accuracy":defaultdict(list)}
+        self.test_results = {"losses":defaultdict(list),
+                    "accuracy":defaultdict(list)}
 
-    def _initialize_loaders(self, task, valid=False):
-        if not valid:
+    def _initialize_loaders(self, task, type_="train"):
+        if type_ == "train":
             return self.train_datasets[task].get_dataloaders()
-        else:
+        elif type_ == "valid":
             return self.valid_datasets[task].get_dataloaders()
+        else:
+            return self.test_datasets[task].get_dataloaders()
 
     def dump_results(self):
         with open(self.results_save_path, 'w') as f:
-            json.dump({"inner":self.inner_results, "outer": self.outer_results}, f)
+            json.dump({"inner":self.inner_results, 
+                "outer": self.outer_results,
+                "test": self.test_results}, f)
 
-    def train(self):
+    def train(self, test_every=1):
         """Run episodes and perform outerloop updates """
-        for epoch in range(1):
+        for epoch in range(2):
             self.outer_optimizer.zero_grad()
             for episode in range(self.num_episodes):
                 print("---- Starting episode {} of epoch {} ----".format(episode, epoch))
                 support_set, query_set = self.sample()
                 self.train_episode(support_set, query_set, episode)
-            self.outer_optimizer.step()
 
-        self.dump_results()
-        torch.save(self.outer_model.state_dict(), self.model_save_path)
+                if epoch % test_every == 0:
+                    test_loss, test_acc = self.evaluate_on_test_set(episode)
+                    print("Test performance: epoch {}, task {}, loss: {}, accuracy: {}".format(
+                            epoch, episode, test_loss, test_acc))
+
+                self.outer_optimizer.step()
+
+            self.dump_results()
+            torch.save(self.outer_model.state_dict(), self.model_save_path)
 
 
     def forward(self, model, batch):
@@ -119,20 +131,27 @@ class MetaTrainer(object):
     def init_prototype_parameters(self, model, support_set, task):
         n_classes = self.task_classes[task]
         prototypes = torch.zeros((n_classes, 768))
-        n_classes = self.task_classes[task]
-        ## WARNING: this only works for 1 batch per class for now.
-        for label in support_set[task].keys():
-            batch = support_set[task][label]
-            input_ids = self._to_device(batch['input_ids'])
-            token_type_ids = self._to_device(batch['token_type_ids'])
-            attention_mask = self._to_device(batch['attention_mask'])
+        print(len(support_set[0]))
+        for label in range(n_classes):
+            batches = support_set[task][label]
+            # Batch is either a list of dicts, or a single dict.
+            if isinstance(batches, dict):
+                batches = [batches]
 
-            encoding = self.outer_model.encoder(input_ids,
+            n_batches = len(batches)    
+            n_samples = 0
+            for batch in batches:
+                n_samples += batch['input_ids'].size(0)
+                input_ids = self._to_device(batch['input_ids'])
+                token_type_ids = self._to_device(batch['token_type_ids'])
+                attention_mask = self._to_device(batch['attention_mask'])
+
+                encoding = self.outer_model.encoder(input_ids,
                                 token_type_ids=token_type_ids,
                                 attention_mask=attention_mask)["last_hidden_state"][:,0,:]
-            prototypes[label, :] = torch.mean(encoding, dim=0)
-
-        model.gamma = prototypes
+                prototypes[label, :] = prototypes[label, :] + torch.sum(encoding, dim=0)
+        
+        model.gamma = prototypes / n_samples
 
     def _extract(self, batch):
         shape = [batch[class_]["input_ids"].shape[1] for class_ in batch.keys()]
@@ -212,6 +231,34 @@ class MetaTrainer(object):
                 param.grad += grads_inner_model[i] + grads_outer_model[i]
 
 
+    def evaluate_on_test_set(self, task):
+        self.outer_model.eval()
+        loss_func = self.loss_funcs[task]
+        n_classes = self.task_classes[task]
+
+        self.test_loaders[task] = self._initialize_loaders(task, type_="test")
+
+        losses, accuracies = [], []
+        support_set = {c:list(self.test_loaders[task][c]) for c in range(n_classes)}
+        with torch.no_grad():
+            self.init_prototype_parameters(self.outer_model, support_set, task)
+            self.outer_model.init_phi(n_classes)
+            for c in range(n_classes):
+                for batch in support_set[c]:
+                    labels = self._to_device(batch["labels"])
+                    logits = self.forward(self.outer_model, batch)
+                    losses.append(loss_func(logits, labels).item())
+                    accuracies.append(self.get_accuracy(logits, labels))
+
+        self.outer_model.gamma = None
+        self.outer_model.phi = None
+        self.outer_model.train()
+        avg_loss = np.mean(losses)
+        avg_acc = np.mean(accuracies)
+        self.test_results["losses"][task].append(avg_loss)
+        self.test_results["accuracy"][task].append(avg_acc)
+        return avg_loss, avg_acc
+
     def train_episode(self, support_set, query_set, task):
         "train inner model for 1 step, returns gradients of encoder on support set."
         n_classes = self.task_classes[task]
@@ -245,18 +292,17 @@ if __name__ == "__main__":
     config = {'freeze_bert': False}
     model = Classifier(config)
 
-    para_train_support, para_train_query = ParaphraseDataset.read(path='data/msrp/', split='train', slice_=1000)
+    para_train_support, para_train_query = ParaphraseDataset.read(path='data/msrp/', split='train', slice_=1000, ratio=0.5)
     para_train_support_metaset = MetaDataset.Initialize(para_train_support, K=10)
     para_train_query_metaset = MetaDataset.Initialize(para_train_query, K=6)
 
-    #para_test_support, para_query = ParaphraseDataset.read(path='data/msrp/', split='test', slice_=16)
-    #para_test_support_metaset = MetaDataset.Initialize(para_test_support, K=10)
-    #para_test_query_metaset = MetaDataset.Initialize(para_test_query, K=6)
+    para_test = ParaphraseDataset.read(path='data/msrp/', split='test', slice_=100)
+    para_test_metaset = MetaDataset.Initialize(para_test, K=6)
 
-    mnli_train_support = MNLI.read(path='data/multinli_1.0/', split='train', slice_=700)
-    mnli_train_support_metaset = MetaDataset.Initialize(mnli_train_support, K=10)
-    mnli_train_query = MNLI.read(path='data/multinli_1.0/', split='dev_matched', slice_=300)
-    mnli_train_query_metaset = MetaDataset.Initialize(mnli_train_query, K=6)
+    #mnli_train_support = MNLI.read(path='data/multinli_1.0/', split='train', slice_=500)
+    #mnli_train_support_metaset = MetaDataset.Initialize(mnli_train_support, K=10)
+    #mnli_train_query = MNLI.read(path='data/multinli_1.0/', split='dev_matched', slice_=500)
+    #mnli_train_query_metaset = MetaDataset.Initialize(mnli_train_query, K=6)
 
     #mnli_test_support, mnli_test_query = MNLI.read(path='data/multinli_1.0/', split='dev_mismatched',slice_=100)
     #mnli_test_support_metaset = MetaDataset.Initialize(mnli_test_support, K=10)
@@ -265,45 +311,13 @@ if __name__ == "__main__":
 
     meta_trainer = MetaTrainer(
                             model = model,
-                            train_datasets = [mnli_train_support_metaset,
-                                            para_train_support_metaset],
-                            val_datasets = [mnli_train_query_metaset,
-                                            para_train_query_metaset],
-                            num_episodes = 2,
+                            train_datasets = [para_train_support_metaset],
+                            val_datasets = [para_train_query_metaset],
+                            test_datasets = [para_test_metaset],
+                            num_episodes = 1,
                             model_save_path = "saved_models/para_mnli.pt",
                             results_save_path = "results/para_mnli.txt"
                             )
 
     meta_trainer.train()
 
-
-
-    #datasetloader = EpisodeDataLoader.create_dataloader(k=8, datasets=[
-    #        ParaphraseDataset(batch_size=8),
-    #        StanceDataset(batch_size=8)
-    #    ], batch_size=16)
-
-   # datasetloader = EpisodeDataLoader(k=8, datasets=[
-   #         StanceDataset(batch_size=8)
-   #     ], batch_size=16)
-
-    #para_train = datasetloader._get_iter(datasetloader.datasets[0], support=True)
-    #para_dev = datasetloader._get_iter(datasetloader.datasets[0], support=False)
-
-   # stance_train = datasetloader._get_iter(datasetloader.datasets[1], support=True)
-   # stance_dev = datasetloader._get_iter(datasetloader.datasets[1], support=False)
-
-   # SDmetadataset = MetaDataset.Initialize(stance_train)
-   # SDloaders = MetaLoader(SDmetadataset).get_data_loader(SDmetadataset.dataloaders())
-
-   # config = {'freeze_bert': False}
-   # model = Classifier(config)
-
-   # meta_trainer = MetaTrainer(
-   #                             model = model,
-   #                             train_loaders = [stance_train],
-   #                             val_loaders = [stance_train],
-   #                             num_episodes = 1
-   #                         )
-
-    #meta_trainer.train()
