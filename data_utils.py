@@ -31,15 +31,16 @@ class SingletonDataset(Dataset):
 
 
 class MetaDataset(Dataset):
-    def __init__(self, dataset, K):
+    def __init__(self, dataset, K, test, seed):
         self.data = dataset
         self.K = K
-        self.rearrange()
+        self.rearrange(test)
+        self.set_seed(seed)
     
     @classmethod
-    def Initialize(cls, dataset, K=10):
+    def Initialize(cls, dataset, K=10, test=False, seed=42):
         #initialize the MetaDataset from dataset
-        return cls(dataset, K)
+        return cls(dataset, K, test, seed)
         
     def __getitem__(self, index):
         pass
@@ -47,14 +48,25 @@ class MetaDataset(Dataset):
     def __len__(self):
         pass
 
+    def set_seed(self, seed):
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed(seed)
+            torch.cuda.manual_seed_all(seed)
+
     # we want to rearrange the dataset so as to make sampling meta-datasets easy
-    def rearrange(self):
+    def rearrange(self, test):
         rearrange_data = defaultdict(lambda: [])
         for triple in self.data:
             label = triple['label']
             rearrange_data[label].append(triple)
         rearrange_data = {key: SingletonDataset(value) for key, value in rearrange_data.items()}
-        self.meta_data = self.balance_data(rearrange_data)
+        if not test:
+            self.meta_data = self.balance_data(rearrange_data)
+        else:
+            self.meta_data = rearrange_data
         self.labels = list(rearrange_data.keys())
     
     def get_dataloaders(self):
@@ -284,3 +296,4 @@ if __name__ == "__main__":
     # loader = MetaLoader(metadataset).get_data_loader(metadataset.dataloaders()[0])
 
     # print(next(loader))
+

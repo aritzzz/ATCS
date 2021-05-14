@@ -11,7 +11,8 @@ class MetaTrainer(object):
 
 
     def __init__(self, model, train_datasets, val_datasets, test_datasets,
-            num_episodes, model_save_path, results_save_path):
+            num_episodes, model_save_path, results_save_path, seed=42):
+        self.set_seed(seed)
         self.outer_model = model
         self.n_tasks = num_episodes
         self.model_save_path = model_save_path
@@ -57,6 +58,14 @@ class MetaTrainer(object):
         else:
             return self.test_datasets[task].get_dataloaders()
 
+    def set_seed(self, seed):
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed(seed)
+            torch.cuda.manual_seed_all(seed)
+
     def dump_results(self):
         with open(self.results_save_path, 'w') as f:
             json.dump({"inner":self.inner_results, 
@@ -69,8 +78,8 @@ class MetaTrainer(object):
             self.outer_optimizer.zero_grad()
             for episode in range(self.num_episodes):
                 print("---- Starting episode {} of epoch {} ----".format(episode, epoch))
-                support_set, query_set = self.sample()
-                self.train_episode(support_set, query_set, episode)
+                #support_set, query_set = self.sample()
+                #self.train_episode(support_set, query_set, episode)
 
                 if epoch % test_every == 0:
                     test_loss, test_acc = self.evaluate_on_test_set(episode)
@@ -131,17 +140,16 @@ class MetaTrainer(object):
     def init_prototype_parameters(self, model, support_set, task):
         n_classes = self.task_classes[task]
         prototypes = torch.zeros((n_classes, 768))
-        print(len(support_set[0]))
+        class_samples = torch.zeros((n_classes,1))
         for label in range(n_classes):
             batches = support_set[task][label]
             # Batch is either a list of dicts, or a single dict.
             if isinstance(batches, dict):
                 batches = [batches]
 
-            n_batches = len(batches)    
-            n_samples = 0
+            n_batches = len(batches)
             for batch in batches:
-                n_samples += batch['input_ids'].size(0)
+                class_samples[label,:] += batch['input_ids'].size(0)
                 input_ids = self._to_device(batch['input_ids'])
                 token_type_ids = self._to_device(batch['token_type_ids'])
                 attention_mask = self._to_device(batch['attention_mask'])
@@ -150,8 +158,8 @@ class MetaTrainer(object):
                                 token_type_ids=token_type_ids,
                                 attention_mask=attention_mask)["last_hidden_state"][:,0,:]
                 prototypes[label, :] = prototypes[label, :] + torch.sum(encoding, dim=0)
-        
-        model.gamma = prototypes / n_samples
+         
+        model.gamma = prototypes / class_samples
 
     def _extract(self, batch):
         shape = [batch[class_]["input_ids"].shape[1] for class_ in batch.keys()]
@@ -239,12 +247,12 @@ class MetaTrainer(object):
         self.test_loaders[task] = self._initialize_loaders(task, type_="test")
 
         losses, accuracies = [], []
-        support_set = {c:list(self.test_loaders[task][c]) for c in range(n_classes)}
+        support_set = {task:{c:list(self.test_loaders[task][c]) for c in range(n_classes)}}
         with torch.no_grad():
             self.init_prototype_parameters(self.outer_model, support_set, task)
             self.outer_model.init_phi(n_classes)
             for c in range(n_classes):
-                for batch in support_set[c]:
+                for batch in support_set[task][c]:
                     labels = self._to_device(batch["labels"])
                     logits = self.forward(self.outer_model, batch)
                     losses.append(loss_func(logits, labels).item())
@@ -297,7 +305,7 @@ if __name__ == "__main__":
     para_train_query_metaset = MetaDataset.Initialize(para_train_query, K=6)
 
     para_test = ParaphraseDataset.read(path='data/msrp/', split='test', slice_=100)
-    para_test_metaset = MetaDataset.Initialize(para_test, K=6)
+    para_test_metaset = MetaDataset.Initialize(para_test, K=6, test=True)
 
     #mnli_train_support = MNLI.read(path='data/multinli_1.0/', split='train', slice_=500)
     #mnli_train_support_metaset = MetaDataset.Initialize(mnli_train_support, K=10)
