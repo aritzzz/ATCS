@@ -128,7 +128,7 @@ class MetaTrainer(object):
             for i, loader in enumerate(dl):
                 b = next(loader, -1)
                 if b == -1:
-                    self.valid_loaders[task] = self._initialize_loaders(task, valid=True)
+                    self.valid_loaders[task] = self._initialize_loaders(task, type_="valid")
                     b = next(self.valid_loaders[task][i], -1)
                 label = b["labels"][0].item()
                 query_task_batch[label] = b
@@ -137,8 +137,8 @@ class MetaTrainer(object):
 
     def init_prototype_parameters(self, model, support_set, task):
         n_classes = self.task_classes[task]
-        prototypes = torch.zeros((n_classes, 768))
-        class_samples = torch.zeros((n_classes,1))
+        prototypes = self._to_device(torch.zeros((n_classes, 768)))
+        class_samples = self._to_device(torch.zeros((n_classes,1)))
         for label in range(n_classes):
             batches = support_set[task][label]
             # Batch is either a list of dicts, or a single dict.
@@ -155,7 +155,7 @@ class MetaTrainer(object):
                 encoding = self.outer_model.encoder(input_ids,
                                 token_type_ids=token_type_ids,
                                 attention_mask=attention_mask)["last_hidden_state"][:,0,:]
-                prototypes[label, :] = prototypes[label, :] + torch.sum(encoding, dim=0)
+                prototypes[label, :] = prototypes[label, :] + self._to_device(torch.sum(encoding, dim=0))
          
         model.gamma = prototypes / class_samples
 
@@ -321,11 +321,11 @@ if __name__ == "__main__":
 
     model = Classifier(config)
 
-    para_train_support, para_train_query = ParaphraseDataset.read(path='data/msrp/', split='train', slice_=1000, ratio=0.5)
+    para_train_support, para_train_query = ParaphraseDataset.read(path='data/msrp/', split='train', ratio=0.5)
     para_train_support_metaset = MetaDataset.Initialize(para_train_support, config["support_k"])
     para_train_query_metaset = MetaDataset.Initialize(para_train_query, config["query_k"])
 
-    para_test = ParaphraseDataset.read(path='data/msrp/', split='test', slice_=100)
+    para_test = ParaphraseDataset.read(path='data/msrp/', split='test')
     para_test_metaset = MetaDataset.Initialize(para_test, config["support_k"], test=True)
 
 
@@ -343,5 +343,5 @@ if __name__ == "__main__":
                             seed = config["seed"]
                             )
 
-    meta_trainer.train(test_every=2)
+    meta_trainer.train(test_every=100)
 
