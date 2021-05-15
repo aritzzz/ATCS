@@ -2,6 +2,7 @@ import copy
 import torch
 import torch.nn as nn
 import json
+import argparse
 from tqdm import tqdm
 from data_utils import *
 from models import Classifier
@@ -10,11 +11,12 @@ from collections import defaultdict
 class MetaTrainer(object):
 
 
-    def __init__(self, model, train_datasets, val_datasets, test_datasets,
-            num_episodes, model_save_path, results_save_path, seed=42):
+    def __init__(self, model, train_datasets, val_datasets, test_datasets, task_classes, epochs,
+            num_episodes, model_save_path, results_save_path, seed=42, device=torch.device("cpu")):
         self.set_seed(seed)
-        self.outer_model = model
+        self.outer_model = model.to(device)
         self.n_tasks = num_episodes
+        self.n_epochs = epochs
         self.model_save_path = model_save_path
         self.results_save_path = results_save_path
         self.train_datasets = train_datasets
@@ -29,17 +31,13 @@ class MetaTrainer(object):
             self.valid_loaders[task] = self._initialize_loaders(task, type_="valid")
 
         self.num_episodes = num_episodes
-        self.device = torch.device("cpu")
+        self.device = device
         self.loss_funcs = {
                     0: nn.CrossEntropyLoss(),
                     1: nn.CrossEntropyLoss(),
                     2: nn.CrossEntropyLoss()
                 }
-        self.task_classes = {
-                    0: 2,
-                    1: 2,
-                    2: 2
-                }
+        self.task_classes = task_classes
         self.outer_optimizer = torch.optim.AdamW(self.outer_model.encoder.parameters(),
                                                 weight_decay=1e-4)
 
@@ -74,12 +72,12 @@ class MetaTrainer(object):
 
     def train(self, test_every=1):
         """Run episodes and perform outerloop updates """
-        for epoch in range(2):
+        for epoch in range(self.n_epochs):
             self.outer_optimizer.zero_grad()
             for episode in range(self.num_episodes):
                 print("---- Starting episode {} of epoch {} ----".format(episode, epoch))
-                #support_set, query_set = self.sample()
-                #self.train_episode(support_set, query_set, episode)
+                support_set, query_set = self.sample()
+                self.train_episode(support_set, query_set, episode)
 
                 if epoch % test_every == 0:
                     test_loss, test_acc = self.evaluate_on_test_set(episode)
@@ -297,24 +295,38 @@ class MetaTrainer(object):
 
 if __name__ == "__main__":
 
-    config = {'freeze_bert': False}
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument("--freeze_bert", action="store_true",
+                        help="Whether to freeze BERT parameters.")
+    parser.add_argument("--epochs", type=int, default=50000,
+                        help="Number of outerloop updates to run.")
+    parser.add_argument("--outer_lr", type=float, default=1e-3,
+                        help="learning rate for outer loop optimizer.")
+    parser.add_argument("--inner_lr", type=float, default=0.1,
+                        help="learning rate for inner loop optimizer.")
+    parser.add_argument("--support_k", type=int, default=10,
+                        help="Number of support samples for each class.")
+    parser.add_argument("--query_k", type=int, default=10,
+                        help="Number of query samples for each class.")
+    parser.add_argument("--model_save_path", type=str, default="saved_models/model.pt",
+                        help="location to store saved model")
+    parser.add_argument("--results_save_path", type=str, default="results/results.txt")
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--n_episodes", type=int, default=1)
+    parser.add_argument("--device", default=torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu"))
+
+
+    config = parser.parse_args().__dict__
+
     model = Classifier(config)
 
     para_train_support, para_train_query = ParaphraseDataset.read(path='data/msrp/', split='train', slice_=1000, ratio=0.5)
-    para_train_support_metaset = MetaDataset.Initialize(para_train_support, K=10)
-    para_train_query_metaset = MetaDataset.Initialize(para_train_query, K=6)
+    para_train_support_metaset = MetaDataset.Initialize(para_train_support, config["support_k"])
+    para_train_query_metaset = MetaDataset.Initialize(para_train_query, config["query_k"])
 
     para_test = ParaphraseDataset.read(path='data/msrp/', split='test', slice_=100)
-    para_test_metaset = MetaDataset.Initialize(para_test, K=6, test=True)
-
-    #mnli_train_support = MNLI.read(path='data/multinli_1.0/', split='train', slice_=500)
-    #mnli_train_support_metaset = MetaDataset.Initialize(mnli_train_support, K=10)
-    #mnli_train_query = MNLI.read(path='data/multinli_1.0/', split='dev_matched', slice_=500)
-    #mnli_train_query_metaset = MetaDataset.Initialize(mnli_train_query, K=6)
-
-    #mnli_test_support, mnli_test_query = MNLI.read(path='data/multinli_1.0/', split='dev_mismatched',slice_=100)
-    #mnli_test_support_metaset = MetaDataset.Initialize(mnli_test_support, K=10)
-    #mnli_test_query_metaset = MetaDataset.Initialize(mnli_test_query, K=10)
+    para_test_metaset = MetaDataset.Initialize(para_test, config["support_k"], test=True)
 
 
     meta_trainer = MetaTrainer(
@@ -322,10 +334,14 @@ if __name__ == "__main__":
                             train_datasets = [para_train_support_metaset],
                             val_datasets = [para_train_query_metaset],
                             test_datasets = [para_test_metaset],
-                            num_episodes = 1,
-                            model_save_path = "saved_models/para_mnli.pt",
-                            results_save_path = "results/para_mnli.txt"
+                            task_classes = {0:2},
+                            epochs = config["epochs"],
+                            num_episodes = config["n_episodes"],
+                            model_save_path = config["model_save_path"],
+                            results_save_path = config["results_save_path"],
+                            device = config["device"],
+                            seed = config["seed"]
                             )
 
-    meta_trainer.train()
+    meta_trainer.train(test_every=2)
 
