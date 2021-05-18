@@ -7,12 +7,39 @@ from tqdm import tqdm
 from data_utils import *
 from models import Classifier
 from collections import defaultdict
+import matplotlib.pyplot as plt
+
+class Plotter(object):
+
+  def __init__(self, name):
+    self.name = name
+    self.logger = defaultdict(lambda: []) #{'train': [], 'valid': []}
+
+  def update(self, dict_):
+    for k, v in dict_.items():
+        self.logger[k].append(v)
+
+  def plot(self):
+    
+    for k, v in self.logger.items():
+        iters = range(len(self.logger[k]))
+        plt.plot(iters, self.logger[k], c='dodgerblue', label="k")
+        plt.xlabel('epoch', fontsize=12)
+        plt.ylabel(k, fontsize=12)
+        # plt.title(self.name, fontsize=10)
+        # plt.legend(loc="best", fontsize=12, frameon=False)
+        plt.tight_layout()
+        plt.savefig('./' + self.name + '_ ' + k + '.png')
+        plt.show()
+
+
+
 
 class MetaTrainer(object):
 
 
     def __init__(self, model, train_datasets, val_datasets, test_datasets, task_classes, epochs,
-            num_episodes, model_save_path, results_save_path, seed=42, device=torch.device("cpu")):
+            num_episodes, model_save_path, results_save_path, clip_value, seed=42, device=torch.device("cpu")):
         self.set_seed(seed)
         self.outer_model = model.to(device)
         self.n_tasks = num_episodes
@@ -38,6 +65,7 @@ class MetaTrainer(object):
                     2: nn.CrossEntropyLoss()
                 }
         self.task_classes = task_classes
+        self.clip_value = clip_value
         self.outer_optimizer = torch.optim.AdamW(self.outer_model.encoder.parameters(),
                                                 weight_decay=1e-4)
 
@@ -48,6 +76,7 @@ class MetaTrainer(object):
         self.test_results = {"losses":defaultdict(list),
                     "accuracy":defaultdict(list)}
 
+        self.plotter = Plotter('test')
     def _initialize_loaders(self, task, type_="train"):
         if type_ == "train":
             return self.train_datasets[task].get_dataloaders()
@@ -183,7 +212,7 @@ class MetaTrainer(object):
         loss_func = self.loss_funcs[task]
         n_classes = self.task_classes[task]
         model.zero_grad()
-        optimizer = torch.optim.AdamW(model.parameters(), lr=0.1, weight_decay=1e-4)
+        optimizer = torch.optim.AdamW(model.parameters(), lr=0.01, weight_decay=1e-4)
 
         batch = self._extract(support_set[task])
         labels = self._to_device(batch['labels'])
@@ -194,8 +223,8 @@ class MetaTrainer(object):
         accuracy = self.get_accuracy(logits, labels)
         self.inner_results["losses"][task].append(loss.item())
         self.inner_results["accuracy"][task].append(accuracy)
-
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), self.clip_value)
         optimizer.step()
 
 
@@ -263,6 +292,7 @@ class MetaTrainer(object):
         avg_acc = np.mean(accuracies)
         self.test_results["losses"][task].append(avg_loss)
         self.test_results["accuracy"][task].append(avg_acc)
+        self.plotter.update({"loss" : avg_loss, "accuracy": avg_acc})
         return avg_loss, avg_acc
 
     def train_episode(self, support_set, query_set, task):
@@ -314,6 +344,7 @@ if __name__ == "__main__":
     parser.add_argument("--results_save_path", type=str, default="results/results.txt")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--n_episodes", type=int, default=1)
+    parser.add_argument("--clip_value", type=float, default=5.0)
     parser.add_argument("--device", default=torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu"))
 
 
@@ -321,11 +352,11 @@ if __name__ == "__main__":
 
     model = Classifier(config)
 
-    para_train_support, para_train_query = ParaphraseDataset.read(path='data/msrp/', split='train', ratio=0.5)
+    para_train_support, para_train_query = StanceDataset.read(path='./data/claim_stance/', split='train', ratio=0.5)
     para_train_support_metaset = MetaDataset.Initialize(para_train_support, config["support_k"])
     para_train_query_metaset = MetaDataset.Initialize(para_train_query, config["query_k"])
 
-    para_test = ParaphraseDataset.read(path='data/msrp/', split='test')
+    para_test = StanceDataset.read(path='./data/claim_stance/', split='test')
     para_test_metaset = MetaDataset.Initialize(para_test, config["support_k"], test=True)
 
 
@@ -340,8 +371,9 @@ if __name__ == "__main__":
                             model_save_path = config["model_save_path"],
                             results_save_path = config["results_save_path"],
                             device = config["device"],
+                            clip_value = config["clip_value"],
                             seed = config["seed"]
                             )
 
-    meta_trainer.train(test_every=100)
+    meta_trainer.train(test_every=10)
 

@@ -249,9 +249,9 @@ class StanceDataset(BaseDataset):
             train_data = data[:n_train]
             dev_data = data[n_train:]
 
-            return cls(train_data), cls(dev_data)
+            return cls(train_data, labels), cls(dev_data, labels)
         else:
-            return cls(data)
+            return cls(data, labels)
 
 
 
