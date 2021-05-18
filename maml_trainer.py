@@ -34,6 +34,7 @@ class Plotter(object):
 
 
 
+from transformers import AdamW, get_cosine_schedule_with_warmup
 
 class MetaTrainer(object):
 
@@ -67,7 +68,9 @@ class MetaTrainer(object):
         self.task_classes = task_classes
         self.clip_value = clip_value
         self.outer_optimizer = torch.optim.AdamW(self.outer_model.encoder.parameters(),
+        self.outer_optimizer = AdamW(self.outer_model.encoder.parameters(),
                                                 weight_decay=1e-4)
+        self.outer_lr_scheduler = get_cosine_schedule_with_warmup(self.outer_optimizer, num_warmup_steps=int(0.10*self.n_epochs*self.num_episodes))
 
         self.inner_results = {"losses":defaultdict(list),
                     "accuracy":defaultdict(list)}
@@ -114,6 +117,7 @@ class MetaTrainer(object):
                             epoch, episode, test_loss, test_acc))
 
                 self.outer_optimizer.step()
+                self.outer_lr_scheduler.step()
 
             self.dump_results()
             torch.save(self.outer_model.state_dict(), self.model_save_path)
@@ -212,7 +216,9 @@ class MetaTrainer(object):
         loss_func = self.loss_funcs[task]
         n_classes = self.task_classes[task]
         model.zero_grad()
-        optimizer = torch.optim.AdamW(model.parameters(), lr=0.01, weight_decay=1e-4)
+        # optimizer = torch.optim.AdamW(model.parameters(), lr=0.01, weight_decay=1e-4)
+        optimizer = AdamW(model.parameters(), lr=0.1, weight_decay=1e-4)
+        # scheduler = get_cosine_schedule_with_warmup(optimizer, num_warmup_steps=)
 
         batch = self._extract(support_set[task])
         labels = self._to_device(batch['labels'])
@@ -323,6 +329,9 @@ class MetaTrainer(object):
 
 
 
+
+
+
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
@@ -358,6 +367,14 @@ if __name__ == "__main__":
 
     para_test = StanceDataset.read(path='./data/claim_stance/', split='test')
     para_test_metaset = MetaDataset.Initialize(para_test, config["support_k"], test=True)
+
+
+    # mnli_train_support = MNLI.read(path='./data/multinli_1.0/', split='train', slice_=-1)
+    # mnli_train_query = MNLI.read(path='./data/multinli_1.0/', split='dev_matched')
+
+    # mnli_train_support_metaset = MetaDataset.Initialize(mnli_train_support, config["support_k"])
+    # mnli_train_query_metaset = MetaDataset.Initialize(mnli_train_query, config["query_k"])
+
 
 
     meta_trainer = MetaTrainer(
