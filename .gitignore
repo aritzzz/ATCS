@@ -4,5 +4,5 @@ multinli_1.0.zip
 claim_stance/
 IBM_Debater_(R)_CS_EACL-2017.v1.zip
 test.py
-.data
+.data/multinli
 test*
