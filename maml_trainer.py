@@ -67,10 +67,10 @@ class MetaTrainer(object):
                 }
         self.task_classes = task_classes
         self.clip_value = clip_value
-        self.outer_optimizer = torch.optim.AdamW(self.outer_model.encoder.parameters(),
+        # self.outer_optimizer = torch.optim.AdamW(self.outer_model.encoder.parameters(),
         self.outer_optimizer = AdamW(self.outer_model.encoder.parameters(),
                                                 weight_decay=1e-4)
-        self.outer_lr_scheduler = get_cosine_schedule_with_warmup(self.outer_optimizer, num_warmup_steps=int(0.10*self.n_epochs*self.num_episodes))
+        self.outer_lr_scheduler = get_cosine_schedule_with_warmup(self.outer_optimizer, num_warmup_steps=int(0.10*self.n_epochs))
 
         self.inner_results = {"losses":defaultdict(list),
                     "accuracy":defaultdict(list)}
@@ -120,6 +120,7 @@ class MetaTrainer(object):
                 self.outer_lr_scheduler.step()
 
             self.dump_results()
+            self.plotter.plot()
             torch.save(self.outer_model.state_dict(), self.model_save_path)
 
 
