@@ -3,7 +3,8 @@ aiohttp==3.7.4
 appnope==0.1.2
 argon2-cffi==20.1.0
 astroid==2.5
-async-generator==1.10
+appnope==0.1.2
+argon2-cffi==20.1.0
 async-timeout==3.0.1
 attrs==20.3.0
 backcall==0.2.0
@@ -29,7 +30,7 @@ cymem==2.0.5
 Cython==0.29.23
 decorator==5.0.6
 defusedxml==0.7.1
-en-core-web-sm==3.0.0
+# en-core-web-sm==3.0.0
 entrypoints==0.3
 filelock==3.0.12
 fsspec==0.9.0
@@ -105,7 +106,7 @@ pyparsing==2.4.7
 pyrsistent==0.17.3
 PySocks==1.7.1
 python-dateutil==2.8.1
-pytorch-lightning==1.2.8
+# pytorch-lightning==1.2.8
 pytz==2021.1
 PyYAML==5.4.1
 pyzmq==20.0.0
@@ -121,8 +122,7 @@ scikit-learn==0.24.1
 scipy==1.6.2
 seaborn==0.11.1
 Send2Trash==1.5.0
-SentEval==0.1.0
-setuptools==52.0.0.post20210125
+# setuptools==52.0.0.post20210125
 shellingham==1.4.0
 sip==4.19.13
 six==1.15.0
@@ -131,7 +131,7 @@ spacy==3.0.5
 spacy-legacy==3.0.2
 srsly==2.4.1
 tensorboard==2.4.0
-tensorboard-plugin-wit==1.6.0
+# tensorboard-plugin-wit==1.6.0
 terminado==0.9.4
 testpath==0.4.4
 thinc==8.0.2
