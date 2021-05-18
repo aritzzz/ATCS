@@ -6,3 +6,6 @@ IBM_Debater_(R)_CS_EACL-2017.v1.zip
 test.py
 .data/multinli
 test*
+slurm_output*
+results/
+saved_models/

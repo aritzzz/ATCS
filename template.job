@@ -16,8 +16,10 @@ module load CUDA/11.0.2-GCC-9.3.0
 module load cuDNN
 module load Anaconda3/2020.02
 
+
 #Activate environment
 source activate atcs
 
 #run experiment
-srun python maml_trainer.py --model_save_path saved_models/para_small_lr.pt --results_save_path results/small_lr.txt --query_k 16 --support_k 32 --epochs 1000
+srun python maml_trainer.py --exp_name small_lr --inner_loop_lr 0.001  --query_k 16 --support_k 32 --epochs 20
+

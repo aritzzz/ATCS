@@ -1,5 +1,4 @@
 import copy
-import torch
 import torch.nn as nn
 import json
 import argparse
@@ -8,6 +7,8 @@ from data_utils import *
 from models import Classifier
 from collections import defaultdict
 import matplotlib.pyplot as plt
+import torch
+import os
 
 class Plotter(object):
 
@@ -29,7 +30,8 @@ class Plotter(object):
         # plt.title(self.name, fontsize=10)
         # plt.legend(loc="best", fontsize=12, frameon=False)
         plt.tight_layout()
-        plt.savefig('./' + self.name + '_ ' + k + '.png')
+        os.makedirs('./figs/', exist_ok=True)
+        plt.savefig('./figs/' + self.name + '_ ' + k + '.png')
         plt.show()
 
 
@@ -40,7 +42,7 @@ class MetaTrainer(object):
 
 
     def __init__(self, model, train_datasets, val_datasets, test_datasets, task_classes, epochs,
-            num_episodes, model_save_path, results_save_path, clip_value, seed=42, device=torch.device("cpu")):
+            num_episodes, model_save_path, results_save_path, clip_value, exp_name, inner_loop_lr, seed=42, device=torch.device("cpu")):
         self.set_seed(seed)
         self.outer_model = model.to(device)
         self.n_tasks = num_episodes
@@ -50,6 +52,10 @@ class MetaTrainer(object):
         self.train_datasets = train_datasets
         self.valid_datasets = val_datasets
         self.test_datasets = test_datasets
+        self.exp_name = exp_name
+
+        os.makedirs(self.model_save_path, exist_ok = True)
+        os.makedirs(self.results_save_path, exist_ok=True)
 
         self.train_loaders = defaultdict(lambda: [])
         self.valid_loaders = defaultdict(lambda: [])
@@ -67,10 +73,11 @@ class MetaTrainer(object):
                 }
         self.task_classes = task_classes
         self.clip_value = clip_value
+        self.inner_loop_lr = inner_loop_lr
         # self.outer_optimizer = torch.optim.AdamW(self.outer_model.encoder.parameters(),
         self.outer_optimizer = AdamW(self.outer_model.encoder.parameters(),
                                                 weight_decay=1e-4)
-        self.outer_lr_scheduler = get_cosine_schedule_with_warmup(self.outer_optimizer, num_warmup_steps=int(0.10*self.n_epochs))
+        self.outer_lr_scheduler = get_cosine_schedule_with_warmup(self.outer_optimizer, num_training_steps=self.n_epochs,  num_warmup_steps=int(0.10*self.n_epochs))
 
         self.inner_results = {"losses":defaultdict(list),
                     "accuracy":defaultdict(list)}
@@ -79,7 +86,8 @@ class MetaTrainer(object):
         self.test_results = {"losses":defaultdict(list),
                     "accuracy":defaultdict(list)}
 
-        self.plotter = Plotter('test')
+        self.plotter = Plotter(self.exp_name)
+
     def _initialize_loaders(self, task, type_="train"):
         if type_ == "train":
             return self.train_datasets[task].get_dataloaders()
@@ -97,7 +105,7 @@ class MetaTrainer(object):
             torch.cuda.manual_seed_all(seed)
 
     def dump_results(self):
-        with open(self.results_save_path, 'w') as f:
+        with open(os.path.join(self.results_save_path, self.exp_name + '.txt'), 'w') as f:
             json.dump({"inner":self.inner_results, 
                 "outer": self.outer_results,
                 "test": self.test_results}, f)
@@ -121,7 +129,7 @@ class MetaTrainer(object):
 
             self.dump_results()
             self.plotter.plot()
-            torch.save(self.outer_model.state_dict(), self.model_save_path)
+            torch.save(self.outer_model.state_dict(), os.path.join(self.model_save_path, self.exp_name + '.pt'))
 
 
     def forward(self, model, batch):
@@ -218,7 +226,7 @@ class MetaTrainer(object):
         n_classes = self.task_classes[task]
         model.zero_grad()
         # optimizer = torch.optim.AdamW(model.parameters(), lr=0.01, weight_decay=1e-4)
-        optimizer = AdamW(model.parameters(), lr=0.1, weight_decay=1e-4)
+        optimizer = AdamW(model.parameters(), lr=self.inner_loop_lr, weight_decay=1e-4)
         # scheduler = get_cosine_schedule_with_warmup(optimizer, num_warmup_steps=)
 
         batch = self._extract(support_set[task])
@@ -254,13 +262,13 @@ class MetaTrainer(object):
         self.outer_results["losses"][task].append(loss.item())
         self.outer_results["accuracy"][task].append(accuracy)
 
-        grads_inner_model = torch.autograd.grad(outputs=loss,
+        grads_inner_model = torch.autograd.grad(outputs=-1*loss,
                                             inputs=model.encoder.parameters(),
                                             retain_graph=True,
                                             create_graph=True,
                                             allow_unused=True)
 
-        grads_outer_model = torch.autograd.grad(outputs=loss,
+        grads_outer_model = torch.autograd.grad(outputs=-1*loss,
                                             inputs=self.outer_model.encoder.parameters(),
                                             allow_unused=True)
 
@@ -349,14 +357,15 @@ if __name__ == "__main__":
                         help="Number of support samples for each class.")
     parser.add_argument("--query_k", type=int, default=10,
                         help="Number of query samples for each class.")
-    parser.add_argument("--model_save_path", type=str, default="saved_models/model.pt",
+    parser.add_argument("--model_save_path", type=str, default="saved_models/",
                         help="location to store saved model")
-    parser.add_argument("--results_save_path", type=str, default="results/results.txt")
+    parser.add_argument("--results_save_path", type=str, default="results/")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--n_episodes", type=int, default=1)
-    parser.add_argument("--clip_value", type=float, default=5.0)
+    parser.add_argument("--clip_value", type=float, default=2.0)
+    parser.add_argument("--inner_loop_lr", type=float, default=0.001)
     parser.add_argument("--device", default=torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu"))
-
+    parser.add_argument("--exp_name", default='default', type=str, help="Model and results will be saved with this name")
 
     config = parser.parse_args().__dict__
 
@@ -390,6 +399,8 @@ if __name__ == "__main__":
                             results_save_path = config["results_save_path"],
                             device = config["device"],
                             clip_value = config["clip_value"],
+                            inner_loop_lr = config["inner_loop_lr"],
+                            exp_name = config["exp_name"],
                             seed = config["seed"]
                             )
 
