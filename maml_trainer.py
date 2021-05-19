@@ -46,7 +46,7 @@ class MetaTrainer(object):
                 val_datasets, test_datasets,
                 task_classes, epochs,
                 inner_lr, outer_lr,
-                inner_batch_size, num_episodes,
+                n_inner_steps, num_episodes,
                 model_save_path, results_save_path,
                 clip_value, exp_name,
                 seed=42, device=torch.device("cpu")):
@@ -62,7 +62,7 @@ class MetaTrainer(object):
         self.exp_name = exp_name
         self.inner_lr = inner_lr
         self.outer_lr = outer_lr
-        self.inner_batch_size = inner_batch_size
+        self.n_inner_steps = n_inner_steps
 
         os.makedirs(self.model_save_path, exist_ok = True)
         os.makedirs(self.results_save_path, exist_ok=True)
@@ -242,9 +242,10 @@ class MetaTrainer(object):
 
         support_samples = self._extract(support_set[task])
         support_len = len(support_samples['labels'])
-        batch_idx = np.arange(0, support_len, self.inner_batch_size)
-        for start_idx in batch_idx:
-            batch = {k:s[start_idx:start_idx+self.inner_batch_size] for k, s in support_samples.items()}
+        batch_idx = np.linspace(0, support_len, self.n_inner_steps + 1, dtype=int)
+        print(batch_idx)
+        for i, start_idx in enumerate(batch_idx[:-1]):
+            batch = {k:s[start_idx:batch_idx[i+1]] for k, s in support_samples.items()}
             labels = self._to_device(batch['labels'])
             optimizer.zero_grad()
             logits = self.forward(model, batch)
@@ -376,8 +377,8 @@ if __name__ == "__main__":
     parser.add_argument("--n_episodes", type=int, default=1)
     parser.add_argument("--clip_value", type=float, default=2.0)
     parser.add_argument("--device", default=torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu"))
-    parser.add_argument("--inner_loop_batch_size", type=int, default=16,
-                        help="batch size for the inner loop updates.")
+    parser.add_argument("--n_inner_steps", type=int, default=5,
+                        help="number of batches for the inner_loop")
     parser.add_argument("--exp_name", default='default', type=str, help="Model and results will be saved here")
 
 
@@ -411,7 +412,7 @@ if __name__ == "__main__":
                             epochs = config["epochs"],
                             inner_lr = config['inner_lr'],
                             outer_lr = config['outer_lr'],
-                            inner_batch_size = config["inner_loop_batch_size"],
+                            n_inner_steps = config["n_inner_steps"],
                             num_episodes = config["n_episodes"],
                             model_save_path = config["model_save_path"],
                             results_save_path = config["results_save_path"],
