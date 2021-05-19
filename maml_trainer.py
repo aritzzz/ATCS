@@ -22,7 +22,7 @@ class Plotter(object):
         self.logger[k].append(v)
 
   def plot(self):
-
+    os.makedirs('./figs', exist_ok=True)
     for k, v in self.logger.items():
         iters = range(len(self.logger[k]))
         plt.plot(iters, self.logger[k], c='dodgerblue', label="k")
@@ -31,9 +31,7 @@ class Plotter(object):
         # plt.title(self.name, fontsize=10)
         # plt.legend(loc="best", fontsize=12, frameon=False)
         plt.tight_layout()
-        os.makedirs('./figs', exist_ok=True)
         plt.savefig('./figs/' + self.name + '_ ' + k + '.png')
-        plt.show()
 
 
 
