@@ -195,9 +195,10 @@ class ParaphraseDataset(BaseDataset):
         data = []
         with open(split_path, 'r') as f:
             lines = f.readlines()[1:slice_]
-        pbar = tqdm(lines)
+        pbar = lines
+        print("Reading and preparing dataset...")
         for line in pbar:
-            pbar.set_description("Reading and Preparing dataset...")
+           # pbar.set_description("Reading and Preparing dataset...")
             attributes = line.lower().replace("\n", "").split("\t")
             label_ = int(attributes[0])
             sent1 = attributes[-2]
@@ -231,9 +232,10 @@ class StanceDataset(BaseDataset):
 
         data = []
         labels = {'PRO': 1, 'CON': 0}
-        pbar = tqdm(df.iterrows())
+        pbar = df.iterrows()
+        print("Reading and Preparing dataset...")
         for _, row in pbar:
-            pbar.set_description("Reading and Preparing dataset...")
+           # pbar.set_description("Reading and Preparing dataset...")
             if row['split'] != split:
                 continue
             sent1 = row['topicText']
@@ -249,9 +251,9 @@ class StanceDataset(BaseDataset):
             train_data = data[:n_train]
             dev_data = data[n_train:]
 
-            return cls(train_data), cls(dev_data)
+            return cls(train_data, labels), cls(dev_data, labels)
         else:
-            return cls(data)
+            return cls(data, labels)
 
 
 
