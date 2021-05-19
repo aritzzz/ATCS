@@ -12,8 +12,13 @@ from transformers import AdamW, get_cosine_schedule_with_warmup
 class MetaTrainer(object):
 
 
-    def __init__(self, model, train_datasets, val_datasets, test_datasets, task_classes, epochs,
-            num_episodes, model_save_path, results_save_path, seed=42, device=torch.device("cpu")):
+    def __init__(self, model, train_datasets, 
+                val_datasets, test_datasets, 
+                task_classes, epochs,
+                inner_lr, outer_lr, 
+                inner_batch_size, num_episodes, 
+                model_save_path, results_save_path, 
+                seed=42, device=torch.device("cpu")):
         self.set_seed(seed)
         self.outer_model = model.to(device)
         self.n_tasks = num_episodes
@@ -23,6 +28,9 @@ class MetaTrainer(object):
         self.train_datasets = train_datasets
         self.valid_datasets = val_datasets
         self.test_datasets = test_datasets
+        self.inner_lr = inner_lr
+        self.outer_lr = outer_lr
+        self.inner_batch_size = inner_batch_size
 
         self.train_loaders = defaultdict(lambda: [])
         self.valid_loaders = defaultdict(lambda: [])
@@ -40,8 +48,8 @@ class MetaTrainer(object):
                 }
         self.task_classes = task_classes
         self.outer_optimizer = AdamW(self.outer_model.encoder.parameters(),
-                                                weight_decay=1e-4)
-        self.outer_lr_scheduler = get_cosine_schedule_with_warmup(self.outer_optimizer, num_warmup_steps=int(0.10*self.n_epochs*self.num_episodes))
+                                    self.outer_lr, weight_decay=1e-4)
+        self.outer_lr_scheduler = get_cosine_schedule_with_warmup(self.outer_optimizer, num_warmup_steps=int(0.10*self.n_epochs), num_training_steps=self.n_epochs)
 
         self.inner_results = {"losses":defaultdict(list),
                     "accuracy":defaultdict(list)}
@@ -81,13 +89,13 @@ class MetaTrainer(object):
                 support_set, query_set = self.sample()
                 self.train_episode(support_set, query_set, episode)
 
-                if epoch % test_every == 0:
-                    test_loss, test_acc = self.evaluate_on_test_set(episode)
-                    print("Test performance: epoch {}, task {}, loss: {}, accuracy: {}".format(
-                            epoch, episode, test_loss, test_acc))
+            if epoch % test_every == 0:
+                test_loss, test_acc = self.evaluate_on_test_set(episode)
+                print("Test performance: epoch {}, task {}, loss: {}, accuracy: {}".format(
+                        epoch, episode, test_loss, test_acc))
 
-                self.outer_optimizer.step()
-                self.outer_lr_scheduler.step()
+            self.outer_optimizer.step()
+            self.outer_lr_scheduler.step()
 
             self.dump_results()
             torch.save(self.outer_model.state_dict(), self.model_save_path)
@@ -186,21 +194,25 @@ class MetaTrainer(object):
         loss_func = self.loss_funcs[task]
         n_classes = self.task_classes[task]
         model.zero_grad()
-        optimizer = AdamW(model.parameters(), lr=0.1, weight_decay=1e-4)
+        optimizer = AdamW(model.parameters(), lr=self.inner_lr, weight_decay=1e-4)
         # scheduler = get_cosine_schedule_with_warmup(optimizer, num_warmup_steps=)
+        
+        support_samples = self._extract(support_set[task])    
+        support_len = len(support_samples['labels'])
+        batch_idx = np.arange(0, support_len, self.inner_batch_size)
+        for start_idx in batch_idx:
+            batch = {k:s[start_idx:start_idx+self.inner_batch_size] for k, s in support_samples.items()}
+            labels = self._to_device(batch['labels'])
+            optimizer.zero_grad()
+            logits = self.forward(model, batch)
 
-        batch = self._extract(support_set[task])
-        labels = self._to_device(batch['labels'])
-        optimizer.zero_grad()
-        logits = self.forward(model, batch)
+            loss = loss_func(logits, labels)
+            accuracy = self.get_accuracy(logits, labels)
+            #self.inner_results["losses"][task].append(loss.item())
+            #self.inner_results["accuracy"][task].append(accuracy)
 
-        loss = loss_func(logits, labels)
-        accuracy = self.get_accuracy(logits, labels)
-        self.inner_results["losses"][task].append(loss.item())
-        self.inner_results["accuracy"][task].append(accuracy)
-
-        loss.backward()
-        optimizer.step()
+            loss.backward()
+            optimizer.step()
 
 
     def get_accuracy(self, logits, labels):
@@ -308,9 +320,9 @@ if __name__ == "__main__":
                         help="Whether to freeze BERT parameters.")
     parser.add_argument("--epochs", type=int, default=50000,
                         help="Number of outerloop updates to run.")
-    parser.add_argument("--outer_lr", type=float, default=1e-3,
+    parser.add_argument("--outer_lr", type=float, default=1e-4,
                         help="learning rate for outer loop optimizer.")
-    parser.add_argument("--inner_lr", type=float, default=0.1,
+    parser.add_argument("--inner_lr", type=float, default=1e-4,
                         help="learning rate for inner loop optimizer.")
     parser.add_argument("--support_k", type=int, default=10,
                         help="Number of support samples for each class.")
@@ -322,35 +334,40 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--n_episodes", type=int, default=1)
     parser.add_argument("--device", default=torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu"))
+    parser.add_argument("--inner_loop_batch_size", type=int, default=16,
+                        help="batch size for the inner loop updates.")
 
 
     config = parser.parse_args().__dict__
 
     model = Classifier(config)
 
-    # para_train_support, para_train_query = ParaphraseDataset.read(path='data/msrp/', split='train', ratio=0.5)
-    # para_train_support_metaset = MetaDataset.Initialize(para_train_support, config["support_k"])
-    # para_train_query_metaset = MetaDataset.Initialize(para_train_query, config["query_k"])
+    para_train_support, para_train_query = ParaphraseDataset.read(path='data/msrp/', split='train', ratio=0.5, slice_=100)
+    para_train_support_metaset = MetaDataset.Initialize(para_train_support, config["support_k"])
+    para_train_query_metaset = MetaDataset.Initialize(para_train_query, config["query_k"])
 
-    para_test = ParaphraseDataset.read(path='data/msrp/', split='test')
+    para_test = ParaphraseDataset.read(path='data/msrp/', split='test', slice_=100)
     para_test_metaset = MetaDataset.Initialize(para_test, config["support_k"], test=True)
 
 
-    mnli_train_support = MNLI.read(path='./data/multinli_1.0/', split='train', slice_=-1)
-    mnli_train_query = MNLI.read(path='./data/multinli_1.0/', split='dev_matched')
+    #mnli_train_support = MNLI.read(path='./data/multinli_1.0/', split='train', slice_=-1)
+    #mnli_train_query = MNLI.read(path='./data/multinli_1.0/', split='dev_matched')
 
-    mnli_train_support_metaset = MetaDataset.Initialize(mnli_train_support, config["support_k"])
-    mnli_train_query_metaset = MetaDataset.Initialize(mnli_train_query, config["query_k"])
+    #mnli_train_support_metaset = MetaDataset.Initialize(mnli_train_support, config["support_k"])
+    #mnli_train_query_metaset = MetaDataset.Initialize(mnli_train_query, config["query_k"])
 
 
 
     meta_trainer = MetaTrainer(
                             model = model,
-                            train_datasets = [mnli_train_support_metaset],
-                            val_datasets = [mnli_train_query_metaset],
+                            train_datasets = [para_train_support_metaset],
+                            val_datasets = [para_train_query_metaset],
                             test_datasets = [para_test_metaset],
                             task_classes = {0:2},
                             epochs = config["epochs"],
+                            inner_lr = config['inner_lr'],
+                            outer_lr = config['outer_lr'],
+                            inner_batch_size = config["inner_loop_batch_size"],
                             num_episodes = config["n_episodes"],
                             model_save_path = config["model_save_path"],
                             results_save_path = config["results_save_path"],
