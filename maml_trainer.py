@@ -9,6 +9,7 @@ from collections import defaultdict
 import matplotlib.pyplot as plt
 import torch
 import os
+import numpy as np
 
 class Plotter(object):
 
@@ -42,7 +43,7 @@ class MetaTrainer(object):
 
 
     def __init__(self, model, train_datasets, val_datasets, test_datasets, task_classes, epochs,
-            num_episodes, model_save_path, results_save_path, clip_value, exp_name, inner_loop_lr, seed=42, device=torch.device("cpu")):
+            num_episodes, model_save_path, results_save_path, clip_value, exp_name, inner_loop_lr, inner_loop_steps, seed=42, device=torch.device("cpu")):
         self.set_seed(seed)
         self.outer_model = model.to(device)
         self.n_tasks = num_episodes
@@ -52,6 +53,7 @@ class MetaTrainer(object):
         self.train_datasets = train_datasets
         self.valid_datasets = val_datasets
         self.test_datasets = test_datasets
+        self.inner_loop_steps = inner_loop_steps
         self.exp_name = exp_name
 
         os.makedirs(self.model_save_path, exist_ok = True)
@@ -74,7 +76,6 @@ class MetaTrainer(object):
         self.task_classes = task_classes
         self.clip_value = clip_value
         self.inner_loop_lr = inner_loop_lr
-        # self.outer_optimizer = torch.optim.AdamW(self.outer_model.encoder.parameters(),
         self.outer_optimizer = AdamW(self.outer_model.encoder.parameters(),
                                                 weight_decay=1e-4)
         self.outer_lr_scheduler = get_cosine_schedule_with_warmup(self.outer_optimizer, num_training_steps=self.n_epochs,  num_warmup_steps=int(0.10*self.n_epochs))
@@ -128,8 +129,8 @@ class MetaTrainer(object):
                 self.outer_lr_scheduler.step()
 
             self.dump_results()
-            self.plotter.plot()
             torch.save(self.outer_model.state_dict(), os.path.join(self.model_save_path, self.exp_name + '.pt'))
+        self.plotter.plot()
 
 
     def forward(self, model, batch):
@@ -222,25 +223,27 @@ class MetaTrainer(object):
 
 
     def inner_loop(self, model, support_set, task):
+
+        inner_loss = []
+        inner_acc = []
         loss_func = self.loss_funcs[task]
         n_classes = self.task_classes[task]
-        model.zero_grad()
-        # optimizer = torch.optim.AdamW(model.parameters(), lr=0.01, weight_decay=1e-4)
-        optimizer = AdamW(model.parameters(), lr=self.inner_loop_lr, weight_decay=1e-4)
-        # scheduler = get_cosine_schedule_with_warmup(optimizer, num_warmup_steps=)
-
-        batch = self._extract(support_set[task])
-        labels = self._to_device(batch['labels'])
-        optimizer.zero_grad()
-        logits = self.forward(model, batch)
-
-        loss = loss_func(logits, labels)
-        accuracy = self.get_accuracy(logits, labels)
-        self.inner_results["losses"][task].append(loss.item())
-        self.inner_results["accuracy"][task].append(accuracy)
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), self.clip_value)
-        optimizer.step()
+        optimizer = torch.optim.SGD(model.parameters(), lr=self.inner_loop_lr, momentum=0.9, weight_decay=1e-4)
+        for k in range(self.inner_loop_steps):
+            model.zero_grad()
+            batch = self._extract(support_set[task])
+            labels = self._to_device(batch['labels'])
+            optimizer.zero_grad()
+            logits = self.forward(model, batch)
+            loss = loss_func(logits, labels)
+            accuracy = self.get_accuracy(logits, labels)
+            inner_loss.append(loss.item)
+            inner_acc.append(accuracy)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), self.clip_value)
+            optimizer.step()
+        self.inner_results["losses"][task].append(np.average(inner_loss))
+        self.inner_results["accuracy"][task].append(np.average(inner_acc))
 
 
     def get_accuracy(self, logits, labels):
@@ -262,13 +265,13 @@ class MetaTrainer(object):
         self.outer_results["losses"][task].append(loss.item())
         self.outer_results["accuracy"][task].append(accuracy)
 
-        grads_inner_model = torch.autograd.grad(outputs=-1*loss,
+        grads_inner_model = torch.autograd.grad(outputs=loss,
                                             inputs=model.encoder.parameters(),
                                             retain_graph=True,
                                             create_graph=True,
                                             allow_unused=True)
 
-        grads_outer_model = torch.autograd.grad(outputs=-1*loss,
+        grads_outer_model = torch.autograd.grad(outputs=loss,
                                             inputs=self.outer_model.encoder.parameters(),
                                             allow_unused=True)
 
@@ -364,6 +367,7 @@ if __name__ == "__main__":
     parser.add_argument("--n_episodes", type=int, default=1)
     parser.add_argument("--clip_value", type=float, default=2.0)
     parser.add_argument("--inner_loop_lr", type=float, default=0.001)
+    parser.add_argument("--inner_loop_steps", type=int, default=5)
     parser.add_argument("--device", default=torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu"))
     parser.add_argument("--exp_name", default='default', type=str, help="Model and results will be saved with this name")
 
@@ -378,12 +382,6 @@ if __name__ == "__main__":
     para_test = StanceDataset.read(path='./data/claim_stance/', split='test')
     para_test_metaset = MetaDataset.Initialize(para_test, config["support_k"], test=True)
 
-
-    # mnli_train_support = MNLI.read(path='./data/multinli_1.0/', split='train', slice_=-1)
-    # mnli_train_query = MNLI.read(path='./data/multinli_1.0/', split='dev_matched')
-
-    # mnli_train_support_metaset = MetaDataset.Initialize(mnli_train_support, config["support_k"])
-    # mnli_train_query_metaset = MetaDataset.Initialize(mnli_train_query, config["query_k"])
 
 
 
@@ -400,6 +398,7 @@ if __name__ == "__main__":
                             device = config["device"],
                             clip_value = config["clip_value"],
                             inner_loop_lr = config["inner_loop_lr"],
+                            inner_loop_steps = config["inner_loop_steps"],
                             exp_name = config["exp_name"],
                             seed = config["seed"]
                             )
