@@ -21,7 +21,7 @@ class Plotter(object):
     for k, v in dict_.items():
         self.logger[k].append(v)
 
-  def plot(self):
+  def plot(self, cosines):
     os.makedirs('./figs', exist_ok=True)
     for k, v in self.logger.items():
         iters = range(len(self.logger[k]))
@@ -32,9 +32,14 @@ class Plotter(object):
         # plt.legend(loc="best", fontsize=12, frameon=False)
         plt.tight_layout()
         plt.savefig('./figs/' + self.name + '_ ' + k + '.png')
-
-
-
+    if cosines:
+        plt.clf()
+        plt.plot(range(len(cosines)), cosines, c='dodgerblue', label="similarity")
+        plt.xlabel('epoch', fontsize=12)
+        plt.ylabel('cosine', fontsize=12)
+        plt.tight_layout()
+        plt.savefig('./figs/' + self.name + '_cosines.png')
+        
 from transformers import AdamW, get_cosine_schedule_with_warmup
 
 class MetaTrainer(object):
@@ -119,13 +124,19 @@ class MetaTrainer(object):
 
     def train(self, test_every=1):
         """Run episodes and perform outerloop updates """
+        conflict_cosines = []
         for epoch in range(self.n_epochs):
             self.outer_optimizer.zero_grad()
+            accumulated_grads = []
             for episode in range(self.num_episodes):
                 print("---- Starting episode {} of epoch {} ----".format(episode, epoch))
                 support_set, query_set = self.sample()
-                self.train_episode(support_set, query_set, episode)
-
+                grads = self.train_episode(support_set, query_set, episode)
+                accumulated_grads.append(grads)
+            grad_cosine = torch.nn.functional.cosine_similarity(*accumulated_grads,dim=0)
+            print(grad_cosine)
+            conflict_cosines.append(grad_cosine.item())
+            
             if epoch % test_every == 0:
                 test_loss, test_acc = self.evaluate_on_test_set(episode)
                 print("Test performance: epoch {}, task {}, loss: {}, accuracy: {}".format(
@@ -136,7 +147,9 @@ class MetaTrainer(object):
 
             self.dump_results()
             torch.save(self.outer_model.state_dict(), os.path.join(self.model_save_path, self.exp_name + '.pt'))
-        self.plotter.plot()
+        
+        np.savetxt(self.results_save_path + self.exp_name + "_cosines.csv", conflict_cosines)
+        self.plotter.plot(cosines=conflict_cosines)
 
 
     def forward(self, model, batch):
@@ -282,14 +295,19 @@ class MetaTrainer(object):
         grads_outer_model = torch.autograd.grad(outputs=loss,
                                             inputs=self.outer_model.encoder.parameters(),
                                             allow_unused=True)
-
+        
+        grads = []
         for i, (name, param) in enumerate(self.outer_model.named_parameters()):
             if 'pooler' in name:
                 continue
             elif param.grad is None:
                 param.grad = grads_inner_model[i] + grads_outer_model[i]
+                grads.append(param.grad.clone().detach())
             else:
                 param.grad += grads_inner_model[i] + grads_outer_model[i]
+                grads.append(param.grad.clone().detach())
+        packed_grad = torch.cat([g.flatten() for g in grads])
+        return packed_grad
 
 
     def evaluate_on_test_set(self, task):
@@ -345,7 +363,8 @@ class MetaTrainer(object):
 
         # Step 7: Apply trained model on query set.
         print("---- Calculating gradients on query set ----")
-        self.calc_validation_grads(inner_model, query_set, task)
+        grads = self.calc_validation_grads(inner_model, query_set, task)
+        return grads
 
 
 
@@ -355,7 +374,8 @@ class MetaTrainer(object):
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
-
+    parser.add_argument("--tasks", type=lambda s: s.split(','), default='para,stance',
+                        help="Names of tasks to train for")
     parser.add_argument("--freeze_bert", action="store_true",
                         help="Whether to freeze BERT parameters.")
     parser.add_argument("--epochs", type=int, default=50000,
@@ -379,39 +399,60 @@ if __name__ == "__main__":
                         help="number of batches for the inner_loop")
     parser.add_argument("--exp_name", default='default', type=str, help="Model and results will be saved here")
 
+    def get_tasks(tasks=['para','stance']):
+        print(tasks)
+        train_datasets = []
+        val_datasets = []
+        test_datasets = []
+        task_classes = []
+        if 'para' in tasks:
+            para_train_support, para_train_query = ParaphraseDataset.read(path='.data/msrp/', split='train', ratio=0.5)
+            para_test = ParaphraseDataset.read(path='.data/msrp/', split='test')
+            
+            train_datasets.append(MetaDataset.Initialize(para_train_support, config["support_k"]))
+            val_datasets.append(MetaDataset.Initialize(para_train_query, config["query_k"]))
+            test_datasets.append(MetaDataset.Initialize(para_test, config["support_k"], test=True))
+            task_classes.append(2)
+        if 'stance' in tasks:
+            stance_train_support, stance_train_query = StanceDataset.read(path='.data/stance/', split='train', ratio=0.5)
+            stance_test = StanceDataset.read(path='.data/claim_stance/', split='test')
+            
+            train_datasets.append(MetaDataset.Initialize(stance_train_support, config["support_k"]))
+            val_datasets.append(MetaDataset.Initialize(stance_train_query, config["query_k"]))
+            test_datasets.append(MetaDataset.Initialize(stance_test, config["support_k"], test=True))
+            task_classes.append(2)
+        
+        if 'mnli' in tasks:
+            pass
+            mnli_train_support = MNLI.read(path='.data/multinli/multinli_1.0/', split='train', slice_=-1)
+            mnli_train_query = MNLI.read(path='.data/multinli/multinli_1.0/', split='dev_matched')
+            mnli_test = MNLI.read(path='.data/multinli/multinli_1.0/', split='dev_mismatched')
 
+            train_datasets.append(MetaDataset.Initialize(mnli_train_support, config["support_k"]))
+            val_datasets.append(MetaDataset.Initialize(mnli_train_query, config["query_k"]))
+            test_datasets.append(MetaDataset.Initialize(mnli_test, config["support_k"], test=True))
+            task_classes.append(3)
+        
+        task_classes = {k:v for k,v in enumerate(task_classes)}
+        return train_datasets, val_datasets, test_datasets, task_classes
 
     config = parser.parse_args().__dict__
 
     model = Classifier(config)
-
-    para_train_support, para_train_query = ParaphraseDataset.read(path='data/msrp/', split='train', ratio=0.5)
-    para_train_support_metaset = MetaDataset.Initialize(para_train_support, config["support_k"])
-    para_train_query_metaset = MetaDataset.Initialize(para_train_query, config["query_k"])
-
-    para_test = ParaphraseDataset.read(path='data/msrp/', split='test')
-    para_test_metaset = MetaDataset.Initialize(para_test, config["support_k"], test=True)
-
-
-    #mnli_train_support = MNLI.read(path='./data/multinli_1.0/', split='train', slice_=-1)
-    #mnli_train_query = MNLI.read(path='./data/multinli_1.0/', split='dev_matched')
-
-    #mnli_train_support_metaset = MetaDataset.Initialize(mnli_train_support, config["support_k"])
-    #mnli_train_query_metaset = MetaDataset.Initialize(mnli_train_query, config["query_k"])
-
-
-
+    
+    train_datasets, val_datasets, test_datasets, task_classes = get_tasks(config["tasks"])
+    
     meta_trainer = MetaTrainer(
                             model = model,
-                            train_datasets = [para_train_support_metaset],
-                            val_datasets = [para_train_query_metaset],
-                            test_datasets = [para_test_metaset],
-                            task_classes = {0:2},
+                            train_datasets = train_datasets,
+                            val_datasets = val_datasets,
+                            test_datasets = test_datasets,
+                            task_classes = task_classes,
                             epochs = config["epochs"],
                             inner_lr = config['inner_lr'],
                             outer_lr = config['outer_lr'],
                             n_inner_steps = config["n_inner_steps"],
-                            num_episodes = config["n_episodes"],
+                            num_episodes = len(config["tasks"]),
                             model_save_path = config["model_save_path"],
                             results_save_path = config["results_save_path"],
                             device = config["device"],
