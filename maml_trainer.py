@@ -136,10 +136,10 @@ class MetaTrainer(object):
             print(grad_cosine)
             conflict_cosines.append(grad_cosine)
             
-            # if epoch % test_every == 0:
-            #     test_loss, test_acc = self.evaluate_on_test_set(episode)
-            #     print("Test performance: epoch {}, task {}, loss: {}, accuracy: {}".format(
-            #             epoch, episode, test_loss, test_acc))
+            if epoch % test_every == 0:
+                test_loss, test_acc = self.evaluate_on_test_set(episode)
+                print("Test performance: epoch {}, task {}, loss: {}, accuracy: {}".format(
+                        epoch, episode, test_loss, test_acc))
 
             self.outer_optimizer.step()
             self.outer_lr_scheduler.step()
