@@ -404,7 +404,7 @@ if __name__ == "__main__":
                                     shuffle=True,
                                     collate_fn=collator2)
 
-    config['n_steps'] = len(para_train) * config['max_epochs']
+    config['n_steps'] = (len(mnli_train)//32) * config['max_epochs']
 
     if config["multitask"]:
         stance_train, stance_dev = StanceDataset.read(path='data/Stance/', split='train', ratio=0.9)
