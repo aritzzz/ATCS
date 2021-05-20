@@ -426,7 +426,7 @@ if __name__ == "__main__":
             pass
             mnli_train_support = MNLI.read(path='.data/multinli/multinli_1.0/', split='train', slice_=-1)
             mnli_train_query = MNLI.read(path='.data/multinli/multinli_1.0/', split='dev_matched')
-            mnli_test = MNLI.read(path='.data/multinli/multinli_1.0/', split='test')
+            mnli_test = MNLI.read(path='.data/multinli/multinli_1.0/', split='dev_mismatched')
 
             train_datasets.append(MetaDataset.Initialize(mnli_train_support, config["support_k"]))
             val_datasets.append(MetaDataset.Initialize(mnli_train_query, config["query_k"]))
