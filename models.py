@@ -47,6 +47,9 @@ class Classifier(nn.Module):
         self.phi.weight.data = self.phi.weight.data.detach()
         self.phi.bias.data = self.phi.bias.data.detach()
 
+    def init_phi_normal(self, n_classes):
+        self.phi = nn.Linear(768, n_classes)
+
     def replace_phi(self):
         
         """For evaluation of the inner model on the evaluation set we dont need to update
@@ -63,6 +66,27 @@ class Classifier(nn.Module):
         scalar_norm = -torch.sum(self.gamma * self.gamma, dim=-1)
         self.phi.bias = scalar_norm + (b_data - scalar_norm).detach()
 
+
+class MultiTaskClassifier(nn.Module):
+
+    def __init__(self, config):
+        super().__init__()
+        self.encoder = BertModel.from_pretrained("bert-base-uncased")
+        self.src_head = nn.Linear(768, config['n_src_classes'])
+        self.aux_head = nn.Linear(768, config['n_aux_classes'])
+
+    def freeze_BERT(self):
+        for p in self.encoder.parameters():
+            p.requires_grad = False
+
+    def forward(self, x, token_type_ids=None, attention_mask=None, src=True):
+        encoded = self.encoder(x,
+                                token_type_ids=token_type_ids,
+                                attention_mask=attention_mask)["last_hidden_state"][:,0,:]
+        if src:
+            return self.src_head(encoded)
+        else:
+            return self.aux_head(encoded)
 
 
 if __name__ == "__main__":

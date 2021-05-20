@@ -96,6 +96,30 @@ class MetaDataset(Dataset):
 
 
 
+class MultiTaskLoader:
+
+    def __init__(self, src_loader, aux_loader):
+        self.src_loader = src_loader
+        self.aux_loader = aux_loader
+
+    def __iter__(self):
+        self.src_iter = iter(self.src_loader)
+        self.aux_iter = iter(self.aux_loader)
+        return self
+
+    def __next__(self):
+        try:
+            src_batch = next(self.src_iter)
+        except:
+            raise StopIteration
+        
+        try:
+            aux_batch = next(self.aux_iter)
+        except StopIteration:
+            self.aux_iter = iter(self.aux_loader)
+            aux_batch = next(self.aux_iter)
+
+        return src_batch, aux_batch
 
 
 # class MetaLoader(object):
@@ -116,6 +140,17 @@ def collater(batch):
         premise = TOKENIZER.pad([item['input'] for item in batch], padding=True)
         label = [item['label'] for item in batch]
         return {'input': premise, 'label': label}
+
+def collator2(batch):
+    labels = [b['label'] for b in batch]
+    inputs = TOKENIZER.pad([b['input'] for b in batch], padding=True)
+    
+    return {
+            "input_ids":torch.LongTensor(inputs['input_ids']),
+            "token_type_ids":torch.LongTensor(inputs['token_type_ids']),
+            "attention_mask":torch.LongTensor(inputs['attention_mask']),
+            "labels":torch.LongTensor(labels)
+        }
 
 
 class BaseDataset(Dataset):
@@ -138,11 +173,10 @@ class BaseDataset(Dataset):
         else:
             return labels[sentence]
     
-    def prepare_BERT_batch(self, batch, batch_size):
+    def prepare_BERT_batch(self, batch, batch_size=8):
         """Prepare batch for BERT.
         Adds the special tokens to input, creates the token_type_ids and attention mask tensors.
         """
-        batch = batch
         input_ids = batch['input']['input_ids']
         token_type_ids = batch['input']['token_type_ids']
         attention_mask = batch['input']['attention_mask']
@@ -203,10 +237,11 @@ class ParaphraseDataset(BaseDataset):
             label_ = int(attributes[0])
             sent1 = attributes[-2]
             sent2 = attributes[-1]
+
             data.append(
-                        {"label":label_, 
-                        "input":MNLI.preprocess((sent1, sent2))}
-                    )
+                    {"label":label_, 
+                    "input":MNLI.preprocess((sent1, sent2))}
+                )
         if ratio < 1:
             np.random.shuffle(np.array(data))
             n_train = int(len(data) * ratio)
