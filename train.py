@@ -13,6 +13,7 @@ from data_utils import *
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 from torch.utils.data import DataLoader
+from transformers import get_cosine_schedule_with_warmup
 
 class BaselineTrainer(pl.LightningModule):
     """Trainer for the baseline experiments which trains BERT + MLP."""
@@ -33,7 +34,10 @@ class BaselineTrainer(pl.LightningModule):
                 }
         optimizer = optimizer_dict[self.config['optimizer']]
         self.optimizer = optimizer(self.model.parameters(), self.config['lr'])
-        return [self.optimizer]
+        self.scheduler = get_cosine_schedule_with_warmup(self.optimizer, 
+                                                        num_training_steps=config['n_steps'],
+                                                        num_warmup_steps=int(0.10*config['n_steps']))
+        return [self.optimizer], self.scheduler
 
     def get_loss_func(self):
         """Returns loss function specified in config."""
@@ -69,6 +73,9 @@ class BaselineTrainer(pl.LightningModule):
         logits = self.forward(batch)
         loss = self.loss_func(logits, labels)
         accuracy = self.calc_accuracy(logits, labels)
+
+        sch = self.scheduler
+        sch.step()
 
         self.log('train_loss', loss)
         self.log('train_accuracy', accuracy, on_step=False, on_epoch=True)
@@ -190,6 +197,9 @@ class MultiTaskTrainer(pl.LightningModule):
         self.custom_backward(src_loss, aux_loss)
         opt.step()
 
+        sch = self.scheduler
+        sch.step()
+
         self.log('src_train_loss', src_loss)
         self.log('aux_train_loss', aux_loss)
         self.log('src_train_accuracy', src_acc, on_step=False, on_epoch=True)
@@ -235,8 +245,11 @@ class MultiTaskTrainer(pl.LightningModule):
 
 
     def configure_optimizers(self):
-        opt = torch.optim.Adam(self.model.parameters())
-        return opt
+        self.opt = torch.optim.Adam(self.model.parameters())
+        self.scheduler = get_cosine_schedule_with_warmup(self.opt, 
+                                                num_training_steps=config['n_steps'],
+                                                num_warmup_steps=int(0.10*config['n_steps']))
+        return [self.opt], [self.scheduler]
 
 
 
@@ -247,18 +260,19 @@ def train_model(loaders, config):
     model_save_path = os.path.join(config['model_save_path'], config["save_name"])
     n_gpus = 1 if torch.cuda.is_available() else 0
     early_stop_callback = EarlyStopping(
-                monitor='validation_loss',
+                monitor='validation_accuracy',
                 patience=10,
                 verbose=False,
-                mode='min'
+                mode='max'
             )
 
     trainer = pl.Trainer(default_root_dir = model_save_path,
-                        checkpoint_callback = ModelCheckpoint(save_weights_only=True, mode='min', monitor='validation_loss'),
+                        checkpoint_callback = ModelCheckpoint(save_weights_only=True, mode='max', monitor='validation_accuracy'),
                         callbacks = [early_stop_callback],
                         gpus = n_gpus,
                         max_epochs = config['max_epochs'],
-                        progress_bar_refresh_rate=1)
+                        progress_bar_refresh_rate=0,
+                        gradient_clip_val=2)
     trainer.logger._log_graph = True
     trainer.logger._default_hp_metric = None
 
@@ -290,19 +304,20 @@ def train_multitask(src_loaders, aux_loaders, config):
     n_gpus = 1 if torch.cuda.is_available() else 0
 
     early_stop_callback = EarlyStopping(
-                monitor='src_val_loss',
+                monitor='src_val_acc',
                 patience=10,
                 verbose=False,
-                mode='min'
+                mode='max'
             )
 
     trainer = pl.Trainer(default_root_dir = model_save_path,
-                        checkpoint_callback = ModelCheckpoint(save_weights_only=True, mode='min', monitor='src_val_loss'),
+                        checkpoint_callback = ModelCheckpoint(save_weights_only=True, mode='max', monitor='src_val_acc'),
                         gpus = n_gpus,
                         callbacks = [early_stop_callback],
                         max_epochs = config['max_epochs'],
-                        progress_bar_refresh_rate=1,
-                        reload_dataloaders_every_epoch=True)
+                        progress_bar_refresh_rate=0,
+                        reload_dataloaders_every_epoch=True,
+                        gradient_clip_val=2)
     trainer.logger._log_graph = True
     trainer.logger._default_hp_metric = None
 
@@ -343,7 +358,7 @@ if __name__ == "__main__":
                         help="Which optimizer to use.")
     parser.add_argument("--loss", type=str, default="ce",
                         help="Which loss function to use.")
-    parser.add_argument("--lr", type=float, default=0.001,
+    parser.add_argument("--lr", type=float, default=0.0001,
                         help="Learning rate for training.")
     parser.add_argument("--max_epochs", type=int, default=10,
                         help="Maximum number of epochs to train for.")
@@ -370,24 +385,29 @@ if __name__ == "__main__":
     
     config = parser.parse_args().__dict__
 
-    para_train, para_dev = ParaphraseDataset.read(path='data/msrp/', split='train', ratio=0.7)
-    para_train_load = DataLoader(para_train, 
-                                batch_size=config['batch_size'], 
-                                shuffle=True,
-                                collate_fn=collator2)
-    para_dev_load = DataLoader(para_dev, 
-                            batch_size=config['batch_size'], 
-                            shuffle=True,
-                            collate_fn=collator2)
+    mnli_train = MNLI.read(path='data/multinli_1.0/', split='train', slice_=-1)
+    mnli_dev = MNLI.read(path='data/multinli_1.0/', split='dev_matched')
+    mnli_test = MNLI.read(path='data/multinli_1.0/', split='dev_unmatched')
 
-    para_test = ParaphraseDataset.read(path='data/msrp/', split='test')
-    para_test_load = DataLoader(para_test, 
-                                batch_size=config['batch_size'], 
-                                shuffle=True,
-                                collate_fn=collator2)
+    mnli_train_load = DataLoader(mnli_train,
+                                    batch_size=config['batch_size'],
+                                    shuffle=True,
+                                    collate_fn=collator2)
+
+    mnli_dev_load = DataLoader(mnli_dev,
+                                    batch_size=config['batch_size'],
+                                    shuffle=True,
+                                    collate_fn=collator2)
+
+    mnli_test_load = DataLoader(mnli_test,
+                                    batch_size=config['batch_size'],
+                                    shuffle=True,
+                                    collate_fn=collator2)
+
+    config['n_steps'] = len(para_train) * config['max_epochs']
 
     if config["multitask"]:
-        stance_train, stance_dev = StanceDataset.read(path='data/Stance/', split='train', ratio=0.7)
+        stance_train, stance_dev = StanceDataset.read(path='data/Stance/', split='train', ratio=0.9)
         stance_train_load = DataLoader(stance_train,
                                     batch_size=config['batch_size'],
                                     shuffle=True,
@@ -408,4 +428,4 @@ if __name__ == "__main__":
                     config)
 
     else:
-        train_model([para_train_load, para_dev_load, para_test_load], config)
+        train_model([mnli_train_load, mnli_dev_load, mnli_test_load], config)
