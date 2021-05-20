@@ -134,7 +134,7 @@ class MetaTrainer(object):
                 accumulated_grads.append(grads)
             grad_cosine = torch.nn.functional.cosine_similarity(*accumulated_grads,dim=0)
             print(grad_cosine)
-            conflict_cosines.append(grad_cosine)
+            conflict_cosines.append(grad_cosine.item())
             
             if epoch % test_every == 0:
                 test_loss, test_acc = self.evaluate_on_test_set(episode)
