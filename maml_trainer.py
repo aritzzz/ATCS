@@ -33,11 +33,12 @@ class Plotter(object):
         plt.tight_layout()
         plt.savefig('./figs/' + self.name + '_ ' + k + '.png')
     if cosines:
+        plt.clf()
         plt.plot(range(len(cosines)), cosines, c='dodgerblue', label="similarity")
         plt.xlabel('epoch', fontsize=12)
         plt.ylabel('cosine', fontsize=12)
         plt.tight_layout()
-        plt.savefig('./figs/' + self.name + '_ cosines.png')
+        plt.savefig('./figs/' + self.name + '_cosines.png')
         
 from transformers import AdamW, get_cosine_schedule_with_warmup
 
@@ -373,7 +374,7 @@ class MetaTrainer(object):
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--tasks", type=list, default=['para','stance'],
+    parser.add_argument("--tasks", type=lambda s: s.split(','), default='para,stance',
                         help="Names of tasks to train for")
     parser.add_argument("--freeze_bert", action="store_true",
                         help="Whether to freeze BERT parameters.")
@@ -399,6 +400,7 @@ if __name__ == "__main__":
     parser.add_argument("--exp_name", default='default', type=str, help="Model and results will be saved here")
 
     def get_tasks(tasks=['para','stance']):
+        print(tasks)
         train_datasets = []
         val_datasets = []
         test_datasets = []
@@ -413,7 +415,7 @@ if __name__ == "__main__":
             task_classes.append(2)
         if 'stance' in tasks:
             stance_train_support, stance_train_query = StanceDataset.read(path='.data/stance/', split='train', ratio=0.5)
-            stance_test = StanceDataset.read(path='.data/stance/', split='test')
+            stance_test = StanceDataset.read(path='.data/claim_stance/', split='test')
             
             train_datasets.append(MetaDataset.Initialize(stance_train_support, config["support_k"]))
             val_datasets.append(MetaDataset.Initialize(stance_train_query, config["query_k"]))
@@ -422,9 +424,9 @@ if __name__ == "__main__":
         
         if 'mnli' in tasks:
             pass
-            mnli_train_support = MNLI.read(path='./data/multinli_1.0/', split='train', slice_=-1)
-            mnli_train_query = MNLI.read(path='./data/multinli_1.0/', split='dev_matched')
-            mnli_test = MNLI.read(path='./data/multinli_1.0/', split='test')
+            mnli_train_support = MNLI.read(path='.data/multinli/multinli_1.0/', split='train', slice_=-1)
+            mnli_train_query = MNLI.read(path='.data/multinli/multinli_1.0/', split='dev_matched')
+            mnli_test = MNLI.read(path='.data/multinli/multinli_1.0/', split='test')
 
             train_datasets.append(MetaDataset.Initialize(mnli_train_support, config["support_k"]))
             val_datasets.append(MetaDataset.Initialize(mnli_train_query, config["query_k"]))
