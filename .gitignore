@@ -9,3 +9,4 @@ test*
 slurm_output*
 results/
 saved_models/
+figs/

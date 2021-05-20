@@ -387,7 +387,7 @@ if __name__ == "__main__":
 
     mnli_train = MNLI.read(path='data/multinli_1.0/', split='train', slice_=-1)
     mnli_dev = MNLI.read(path='data/multinli_1.0/', split='dev_matched')
-    mnli_test = MNLI.read(path='data/multinli_1.0/', split='dev_unmatched')
+    mnli_test = MNLI.read(path='data/multinli_1.0/', split='dev_mismatched')
 
     mnli_train_load = DataLoader(mnli_train,
                                     batch_size=config['batch_size'],
