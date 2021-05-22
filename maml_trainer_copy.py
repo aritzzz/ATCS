@@ -494,7 +494,7 @@ if __name__ == "__main__":
 	para_train_query_metaset = MetaDataset.Initialize(para_train_query, config["query_k"])
 
 
-	para_test_support, para_test_query = StanceDataset.read(path='./data/msrp/', split='test', ratio=0.5)
+	para_test_support, para_test_query = ParaphraseDataset.read(path='./data/msrp/', split='test', ratio=0.5)
 	para_test_support_metaset = MetaDataset.Initialize(para_test_support, config["support_k"])
 	para_test_query_metaset = MetaDataset.Initialize(para_test_query, config["query_k"])
 
