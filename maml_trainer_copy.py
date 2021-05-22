@@ -320,11 +320,11 @@ class MetaTrainer(object):
 
 		inner_model = copy.deepcopy(self.outer_model)
 
-		for _ in range(m):
-			support_set = self.valid_sampler.sample_support(task)
-			if self.valid_sampler.exhausted[task]["support"]:
+		support_set = self.valid_sampler.sample_support(task)
+		if self.valid_sampler.exhausted[task]["support"]:
 				self.valid_sampler.reset_sampler(task, type_="support")
 				support_set = self.valid_sampler.sample_support(task)
+		for _ in range(m):
 
 			self.init_prototype_parameters(inner_model, support_set, task)
 			inner_model.init_phi(n_classes)
@@ -441,14 +441,54 @@ if __name__ == "__main__":
 
 	config = parser.parse_args().__dict__
 
+
+	# def get_tasks(tasks=['para','stance']):
+ #        print(tasks)
+ #        train_datasets = []
+ #        val_datasets = []
+ #        test_datasets = []
+ #        task_classes = []
+ #        if 'para' in tasks:
+ #            para_train_support, para_train_query = ParaphraseDataset.read(path='.data/msrp/', split='train', ratio=0.5)
+ #            para_test = ParaphraseDataset.read(path='.data/msrp/', split='test')
+            
+ #            train_datasets.append(MetaDataset.Initialize(para_train_support, config["support_k"]))
+ #            val_datasets.append(MetaDataset.Initialize(para_train_query, config["query_k"]))
+ #            test_datasets.append(MetaDataset.Initialize(para_test, config["support_k"], test=True))
+ #            task_classes.append(2)
+        
+ #        if 'stance' in tasks:
+ #            stance_train_support, stance_train_query = StanceDataset.read(path='.data/stance/', split='train', ratio=0.5)
+ #            stance_test = StanceDataset.read(path='.data/claim_stance/', split='test')
+            
+ #            train_datasets.append(MetaDataset.Initialize(stance_train_support, config["support_k"]))
+ #            val_datasets.append(MetaDataset.Initialize(stance_train_query, config["query_k"]))
+ #            test_datasets.append(MetaDataset.Initialize(stance_test, config["support_k"], test=True))
+ #            task_classes.append(2)
+        
+ #        if 'mnli' in tasks:
+ #            pass
+ #            mnli_train_support = MNLI.read(path='.data/multinli/multinli_1.0/', split='train', slice_=-1)
+ #            mnli_train_query = MNLI.read(path='.data/multinli/multinli_1.0/', split='dev_matched')
+ #            mnli_test = MNLI.read(path='.data/multinli/multinli_1.0/', split='dev_mismatched')
+
+ #            train_datasets.append(MetaDataset.Initialize(mnli_train_support, config["support_k"]))
+ #            val_datasets.append(MetaDataset.Initialize(mnli_train_query, config["query_k"]))
+ #            test_datasets.append(MetaDataset.Initialize(mnli_test, config["support_k"], test=True))
+ #            task_classes.append(3)
+        
+ #        task_classes = {k:v for k,v in enumerate(task_classes)}
+ #        return train_datasets, val_datasets, test_datasets, task_classes
+
+
 	model = Classifier(config)
 
-	para_train_support, para_train_query = StanceDataset.read(path='./data/claim_stance/', split='train', ratio=0.5)
+	para_train_support, para_train_query = ParaphraseDataset.read(path='./data/msrp/', split='train', ratio=0.5)
 	para_train_support_metaset = MetaDataset.Initialize(para_train_support, config["support_k"])
 	para_train_query_metaset = MetaDataset.Initialize(para_train_query, config["query_k"])
 
 
-	para_test_support, para_test_query = StanceDataset.read(path='./data/claim_stance/', split='test', ratio=0.5)
+	para_test_support, para_test_query = ParaphraseDataset.read(path='./data/msrp/', split='test', ratio=0.5)
 	para_test_support_metaset = MetaDataset.Initialize(para_test_support, config["support_k"])
 	para_test_query_metaset = MetaDataset.Initialize(para_test_query, config["query_k"])
 
