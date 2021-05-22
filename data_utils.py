@@ -169,7 +169,7 @@ class BaseDataset(Dataset):
     @staticmethod
     def preprocess(sentence, labels=None, label=False):
         if not label:
-            return TOKENIZER(sentence[0], sentence[1], add_special_tokens=True)
+            return TOKENIZER(sentence[0], sentence[1], add_special_tokens=True, truncation=True, max_length=512)
         else:
             return labels[sentence]
     
@@ -290,6 +290,59 @@ class StanceDataset(BaseDataset):
         else:
             return cls(data, labels)
 
+class ScitailDataset(BaseDataset):
+    def __init__(self, data, labels):
+        self.data = data
+        self.labels = labels
+    
+    @classmethod
+    def read(cls, path='./data/SciTailV1.1/', split='train', slice_=-1, ratio=1, random_seed=42):
+        labels = {'neutral': 0, 'entailment': 1}
+        split_path = os.path.join(path, 'predictor_format', 'scitail_1.0_structure_' + split + '.jsonl')
+        with open(split_path, 'r', encoding='utf8', errors='ignore') as f:
+            lines = f.readlines()[:slice_]
+        data = []
+        print("Reading and Preparing dataset...")
+        for line in lines:
+            line = json.loads(line)
+            label_ = line['gold_label']
+            if label_ not in labels.keys():
+                continue
+            premise = line['sentence1']
+            hypothesis = line['sentence2']
+            data.append(
+                        {'label':ScitailDataset.preprocess(label_, labels=labels, label=True),
+                        'input':ScitailDataset.preprocess((premise, hypothesis))}
+                        )
+        return cls(data, labels)
+
+class VitaminC(BaseDataset):
+    def __init__(self, data, labels):
+        self.data = data
+        self.labels = labels
+    
+    @classmethod
+    def read(cls, path='./data/vitaminc/', split='train', slice_=-1, ratio=1, random_seed=42):
+        labels = {'NOT ENOUGH INFO': 0, 'SUPPORTS': 1, 'REFUTES': 2}
+        split_path = os.path.join(path, split + '.jsonl')
+        with open(split_path, 'r', encoding='utf8', errors='ignore') as f:
+            lines = f.readlines()[:slice_]
+        data = []
+        pbar = tqdm(lines)
+        for line in pbar:
+            pbar.set_description("Reading and Preparing dataset...")
+            line = json.loads(line)
+            label_ = line['label']
+            if label_ not in labels.keys():
+                continue
+            premise = line['claim']
+            hypothesis = line['evidence']
+            data.append(
+                        {'label':VitaminC.preprocess(label_, labels=labels, label=True),
+                        'input':VitaminC.preprocess((premise, hypothesis))}
+                        )
+        return cls(data, labels)
+
 
 
 
@@ -297,24 +350,29 @@ class StanceDataset(BaseDataset):
 
 if __name__ == "__main__":
 
-    train = MNLI.read(path='./multinli_1.0/', split='train', slice_=1000)
+    # d1 = ScitailDataset.read(slice_ = -1)
+    # print(len(d1))
+    d = VitaminC.read(slice_=-1)
+    print(len(d))
 
-    metadataset = MetaDataset.Initialize(train)
+    # train = MNLI.read(path='./multinli_1.0/', split='train', slice_=1000)
+
+    # metadataset = MetaDataset.Initialize(train)
 
 
-    loader = metadataset.get_dataloaders()[0]
+    # loader = metadataset.get_dataloaders()[0]
     
-    count = 0
-    while True:
-        b = next(loader, -1)
-        print(b)
-        print(count, ": Ok")
-        if b == -1:
-            print("Oops! Loader exhausted. reinitializing...")
-            #reinitialize dataloader...
-            loader = metadataset.get_dataloaders()[0]
-        count+=1
-        break
+    # count = 0
+    # while True:
+    #     b = next(loader, -1)
+    #     print(b)
+    #     print(count, ": Ok")
+    #     if b == -1:
+    #         print("Oops! Loader exhausted. reinitializing...")
+    #         #reinitialize dataloader...
+    #         loader = metadataset.get_dataloaders()[0]
+    #     count+=1
+    #     break
 
 
     #train = StanceDataset.read(path="data/Stance/", split='train', slice_=1000)
