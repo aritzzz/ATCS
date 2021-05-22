@@ -126,6 +126,8 @@ class MetaTrainer(object):
 		self.train_sampler = train_sampler
 		self.valid_sampler = valid_sampler
 		self.test_sampler = test_sampler
+
+		self.BEST_VAL_ACC = 0.0
 		
 
 		self.loss_funcs = {
@@ -184,11 +186,15 @@ class MetaTrainer(object):
 				test_loss, test_acc = self.validate(episode)
 				print("Test performance: epoch {}, task {}, loss: {}, accuracy: {}".format(
 						epoch, episode, test_loss, test_acc))
+				if test_acc > self.BEST_VAL_ACC:
+					self.BEST_VAL_ACC = test_acc
+					torch.save(self.outer_model.state_dict(), os.path.join(self.model_save_path, self.exp_name + '.pt'))
+
 
 			self.outer_optimizer.step()
 			self.outer_lr_scheduler.step()
 			self.dump_results()
-			torch.save(self.outer_model.state_dict(), os.path.join(self.model_save_path, self.exp_name + '.pt'))
+		
 		self.plotter.plot()
 
 
@@ -488,7 +494,7 @@ if __name__ == "__main__":
 	para_train_query_metaset = MetaDataset.Initialize(para_train_query, config["query_k"])
 
 
-	para_test_support, para_test_query = ParaphraseDataset.read(path='./data/msrp/', split='test', ratio=0.5)
+	para_test_support, para_test_query = StanceDataset.read(path='./data/msrp/', split='test', ratio=0.5)
 	para_test_support_metaset = MetaDataset.Initialize(para_test_support, config["support_k"])
 	para_test_query_metaset = MetaDataset.Initialize(para_test_query, config["query_k"])
 
