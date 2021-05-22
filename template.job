@@ -21,11 +21,11 @@ module load Anaconda3/2020.02
 source activate atcs
 
 #run experiment
-for outer_lr in 1e-4 2e-4 5e-5
+for outer_lr in 0.0001 0.0002 0.00005
   do
-    for inner_lr in 1e-1 1e-2 1e-3
+    for inner_lr in 0.1 0.02 0.003
       do
-          srun python maml_trainer_copy.py --exp_name "$outer_lr_$inner_lr" --inner_lr inner_lr --outer_lr outer_lr --epochs 3000 --clip_value 1.5 --query_k 16 --support_k 32
+          srun python maml_trainer_copy.py --exp_name "$outer_lr_$inner_lr" --inner_lr $inner_lr --outer_lr $outer_lr --epochs 3000 --clip_value 1.5 --query_k 16 --support_k 32
       done
   done
 
