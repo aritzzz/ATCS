@@ -241,7 +241,6 @@ class MetaTrainer(object):
         support_samples = self._extract(support_set[task])
         support_len = len(support_samples['labels'])
         batch_idx = np.linspace(0, support_len, self.n_inner_steps + 1, dtype=int)
-        print(batch_idx)
         for i, start_idx in enumerate(batch_idx[:-1]):
             batch = {k:s[start_idx:batch_idx[i+1]] for k, s in support_samples.items()}
             labels = self._to_device(batch['labels'])
