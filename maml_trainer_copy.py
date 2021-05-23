@@ -89,10 +89,6 @@ class Sampler(object):
 			self.query_loaders[task] = self._initialize_loaders(task, type_="query")
 
 
-
-
-
-
 class MetaTrainer(object):
 
 
@@ -129,6 +125,8 @@ class MetaTrainer(object):
 
 		self.BEST_VAL_ACC = 0.0
 		
+		print(self.num_episodes)
+		print(self.task_classes)
 
 		self.loss_funcs = {
 					0: nn.CrossEntropyLoss(),
@@ -148,7 +146,7 @@ class MetaTrainer(object):
 		self.test_results = {"losses":defaultdict(list),
 					"accuracy":defaultdict(list)}
 
-		self.plotter = Plotter(self.exp_name)
+		# self.plotter = Plotter(self.exp_name)
 
 	def set_seed(self, seed):
 		random.seed(seed)
@@ -168,7 +166,8 @@ class MetaTrainer(object):
 		"""Run episodes and perform outerloop updates """
 		for epoch in range(self.n_epochs):
 			self.outer_optimizer.zero_grad()
-			for episode in range(self.num_episodes):
+			#for each of the task in the number of meta-training tasks
+			for episode in range(self.num_episodes['train']):
 				print("---- Starting episode {} of epoch {} ----".format(episode, epoch))
 				support_set = self.train_sampler.sample_support(episode)
 				if self.train_sampler.exhausted[episode]["support"]:
@@ -183,7 +182,7 @@ class MetaTrainer(object):
 				self.train_episode(support_set, query_set, episode)
 
 			if epoch % test_every == 0:
-				test_loss, test_acc = self.validate(episode)
+				test_loss, test_acc = self.validate("valid")
 				print("Test performance: epoch {}, task {}, loss: {}, accuracy: {}".format(
 						epoch, episode, test_loss, test_acc))
 				if test_acc > self.BEST_VAL_ACC:
@@ -195,7 +194,7 @@ class MetaTrainer(object):
 			self.outer_lr_scheduler.step()
 			self.dump_results()
 		
-		self.plotter.plot()
+		# self.plotter.plot()
 
 
 	def forward(self, model, batch):
@@ -209,8 +208,9 @@ class MetaTrainer(object):
 			inp = torch.tensor(inp)
 		return inp.to(self.device)
 
-	def init_prototype_parameters(self, model, support_set, task):
-		n_classes = self.task_classes[task]
+	def init_prototype_parameters(self, model, n_classes, support_set, task):
+		# print("In Init Prototypes ", task, n_classes)
+		# print(support_set)
 		prototypes = self._to_device(torch.zeros((n_classes, 768)))
 		class_samples = self._to_device(torch.zeros((n_classes,1)))
 		for label in range(n_classes):
@@ -256,12 +256,11 @@ class MetaTrainer(object):
 		return tensor
 
 
-	def inner_loop(self, model, support_set, task):
+	def inner_loop(self, model, n_classes, support_set, task):
 
 		inner_loss = []
 		inner_acc = []
-		loss_func = self.loss_funcs[task]
-		n_classes = self.task_classes[task]
+		loss_func = nn.CrossEntropyLoss()
 		model.zero_grad()
 		optimizer = AdamW(model.parameters(), lr=self.inner_lr, weight_decay=1e-4)
 
@@ -286,9 +285,8 @@ class MetaTrainer(object):
 		return (predictions == labels).float().mean().item()
 
 
-	def calc_validation_grads(self, model, query_set, task):
-		loss_func = self.loss_funcs[task]
-		n_classes = self.task_classes[task]
+	def calc_validation_grads(self, model, n_classes, query_set, task):
+		loss_func = nn.CrossEntropyLoss()
 
 		batch = self._extract(query_set)
 		labels = self._to_device(batch["labels"])
@@ -319,97 +317,72 @@ class MetaTrainer(object):
 				param.grad += grads_inner_model[i] + grads_outer_model[i]
 
 
-	def validate(self, task, m=5):
+	def validate(self, mode, m=5):
+		if mode == "valid":
+			sampler = self.valid_sampler
+		if mode == "test":
+			sampler = self.test_sampler
+		for task in range(self.num_episodes[mode]):
+			n_classes = self.task_classes[mode][task]
+			loss_func = nn.CrossEntropyLoss()
+			inner_model = copy.deepcopy(self.outer_model)
 
-		n_classes = self.task_classes[task]
-		loss_func = self.loss_funcs[task]
+			support_set = sampler.sample_support(task)
+			if sampler.exhausted[task]["support"]:
+					sampler.reset_sampler(task, type_="support")
+					support_set = sampler.sample_support(task)
+			for _ in range(m):
+				self.init_prototype_parameters(inner_model, n_classes, support_set, task)
+				inner_model.init_phi(n_classes)
+				self.inner_loop(inner_model, n_classes, support_set, task)
 
-		inner_model = copy.deepcopy(self.outer_model)
+			#validate on the whole query loader
+			losses, accuracies = [], []
+			with torch.no_grad():
+					while True:
+						query_set = sampler.sample_query(task)
+						if sampler.exhausted[task]["query"]:
+							break
+						batch = self._extract(query_set)
+						labels = self._to_device(batch["labels"])
+						logits = self.forward(inner_model, batch)
+						losses.append(loss_func(logits, labels).item())
+						accuracies.append(self.get_accuracy(logits, labels))
+					sampler.reset_sampler(task, type_="query")
 
-		support_set = self.valid_sampler.sample_support(task)
-		if self.valid_sampler.exhausted[task]["support"]:
-				self.valid_sampler.reset_sampler(task, type_="support")
-				support_set = self.valid_sampler.sample_support(task)
-		for _ in range(m):
+			avg_loss = np.mean(losses)
+			avg_acc = np.mean(accuracies)
+			self.test_results["losses"][task].append(avg_loss)
+			self.test_results["accuracy"][task].append(avg_acc)
 
-			self.init_prototype_parameters(inner_model, support_set, task)
-			inner_model.init_phi(n_classes)
-			self.inner_loop(inner_model, support_set, task)
-
-		#validate on the whole query loader
-		losses, accuracies = [], []
-		with torch.no_grad():
-				while True:
-					query_set = self.valid_sampler.sample_query(task)
-					if self.valid_sampler.exhausted[task]["query"]:
-						break
-					batch = self._extract(query_set)
-					labels = self._to_device(batch["labels"])
-					logits = self.forward(inner_model, batch)
-					losses.append(loss_func(logits, labels).item())
-					accuracies.append(self.get_accuracy(logits, labels))
-				self.valid_sampler.reset_sampler(task, type_="query")
-
-		avg_loss = np.mean(losses)
-		avg_acc = np.mean(accuracies)
-		self.test_results["losses"][task].append(avg_loss)
-		self.test_results["accuracy"][task].append(avg_acc)
-		self.plotter.update({"loss" : avg_loss, "accuracy": avg_acc})
-		return avg_loss, avg_acc
-
-		# self.outer_model.eval()
-		# loss_func = self.loss_funcs[task]
-		# n_classes = self.task_classes[task]
-
-		# self.test_loaders[task] = self._initialize_loaders(task, type_="test")
-		# print("In test_set...")
-		# losses, accuracies = [], []
-		# support_set = {task:{c:list(self.test_loaders[task][c]) for c in range(n_classes)}}
-		# with torch.no_grad():
-		# 	self.init_prototype_parameters(self.outer_model, support_set, task)
-		# 	self.outer_model.init_phi(n_classes)
-		# 	for c in range(n_classes):
-		# 		for batch in support_set[task][c]:
-		# 			labels = self._to_device(batch["labels"])
-		# 			logits = self.forward(self.outer_model, batch)
-		# 			losses.append(loss_func(logits, labels).item())
-		# 			accuracies.append(self.get_accuracy(logits, labels))
-
-		# self.outer_model.gamma = None
-		# self.outer_model.phi = None
-		# self.outer_model.train()
-		# avg_loss = np.mean(losses)
-		# avg_acc = np.mean(accuracies)
-		# self.test_results["losses"][task].append(avg_loss)
-		# self.test_results["accuracy"][task].append(avg_acc)
 		# self.plotter.update({"loss" : avg_loss, "accuracy": avg_acc})
-		# return avg_loss, avg_acc
+		return avg_loss, avg_acc
 
 	def train_episode(self, support_set, query_set, task):
 		"train inner model for 1 step, returns gradients of encoder on support set."
-		n_classes = self.task_classes[task]
-		loss_func = self.loss_funcs[task]
+		n_classes = self.task_classes['train'][task]
+		loss_func = nn.CrossEntropyLoss()
 
 		# Step 2: Duplicate model
 		inner_model = copy.deepcopy(self.outer_model)
 
 		# Step 3: Init prototype vectors (for now just take n embedding vectors).
 		print("---- Initializing prototype parameters ----")
-		self.init_prototype_parameters(inner_model, support_set, task)
+		self.init_prototype_parameters(inner_model, n_classes, support_set, task)
 
 		# Step 4: Init output parameters (phi).
 		inner_model.init_phi(n_classes)
 
 		# Step 5: perform k inner loop steps.
 		print("---- Performing inner loop updates ----")
-		self.inner_loop(inner_model, support_set, task)
+		self.inner_loop(inner_model, n_classes, support_set, task)
 
 		# Step 6: Replace output parameters with trick.
 		inner_model.replace_phi()
 
 		# Step 7: Apply trained model on query set.
 		print("---- Calculating gradients on query set ----")
-		self.calc_validation_grads(inner_model, query_set, task)
+		self.calc_validation_grads(inner_model, n_classes, query_set, task)
 
 
 
@@ -428,15 +401,14 @@ if __name__ == "__main__":
 						help="learning rate for outer loop optimizer.")
 	parser.add_argument("--inner_lr", type=float, default=1e-4,
 						help="learning rate for inner loop optimizer.")
-	parser.add_argument("--support_k", type=int, default=10,
+	parser.add_argument("--support_k", type=int, default=2,
 						help="Number of support samples for each class.")
-	parser.add_argument("--query_k", type=int, default=10,
+	parser.add_argument("--query_k", type=int, default=2,
 						help="Number of query samples for each class.")
 	parser.add_argument("--model_save_path", type=str, default="saved_models/",
 						help="location to store saved model")
 	parser.add_argument("--results_save_path", type=str, default="results/")
 	parser.add_argument("--seed", type=int, default=42)
-	parser.add_argument("--n_episodes", type=int, default=1)
 	parser.add_argument("--clip_value", type=float, default=2.0)
 	parser.add_argument("--device", default=torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu"))
 	parser.add_argument("--n_inner_steps", type=int, default=5,
@@ -448,73 +420,59 @@ if __name__ == "__main__":
 	config = parser.parse_args().__dict__
 
 
-	# def get_tasks(tasks=['para','stance']):
- #        print(tasks)
- #        train_datasets = []
- #        val_datasets = []
- #        test_datasets = []
- #        task_classes = []
- #        if 'para' in tasks:
- #            para_train_support, para_train_query = ParaphraseDataset.read(path='.data/msrp/', split='train', ratio=0.5)
- #            para_test = ParaphraseDataset.read(path='.data/msrp/', split='test')
-            
- #            train_datasets.append(MetaDataset.Initialize(para_train_support, config["support_k"]))
- #            val_datasets.append(MetaDataset.Initialize(para_train_query, config["query_k"]))
- #            test_datasets.append(MetaDataset.Initialize(para_test, config["support_k"], test=True))
- #            task_classes.append(2)
-        
- #        if 'stance' in tasks:
- #            stance_train_support, stance_train_query = StanceDataset.read(path='.data/stance/', split='train', ratio=0.5)
- #            stance_test = StanceDataset.read(path='.data/claim_stance/', split='test')
-            
- #            train_datasets.append(MetaDataset.Initialize(stance_train_support, config["support_k"]))
- #            val_datasets.append(MetaDataset.Initialize(stance_train_query, config["query_k"]))
- #            test_datasets.append(MetaDataset.Initialize(stance_test, config["support_k"], test=True))
- #            task_classes.append(2)
-        
- #        if 'mnli' in tasks:
- #            pass
- #            mnli_train_support = MNLI.read(path='.data/multinli/multinli_1.0/', split='train', slice_=-1)
- #            mnli_train_query = MNLI.read(path='.data/multinli/multinli_1.0/', split='dev_matched')
- #            mnli_test = MNLI.read(path='.data/multinli/multinli_1.0/', split='dev_mismatched')
+	#All the Tasks that are allowed are: MNLI(has dev set), Paraphrase, Stance, VitaminC(has dev set), SciTail(has dev set)
+	def get_tasks(meta_training_tasks=['mnli','scitail'],
+				meta_validation_tasks=['paraphrase'],
+				meta_testing_tasks=['vitaminc'], slice=-1):
+		train_support = []
+		train_query = []
+		train_classes = []
+		for training_task in meta_training_tasks:
+			support, query, classes = sample_metaset(config, training_task, 'train', slice=slice)
+			train_support.append(support)
+			train_query.append(query)
+			train_classes.append(classes)
+		
+		valid_support = []
+		valid_query = []
+		valid_classes = []
+		for valid_task in meta_validation_tasks:
+			support, query, classes = sample_metaset(config, valid_task, 'valid', slice=slice)
+			valid_support.append(support)
+			valid_query.append(query)
+			valid_classes.append(classes)
 
- #            train_datasets.append(MetaDataset.Initialize(mnli_train_support, config["support_k"]))
- #            val_datasets.append(MetaDataset.Initialize(mnli_train_query, config["query_k"]))
- #            test_datasets.append(MetaDataset.Initialize(mnli_test, config["support_k"], test=True))
- #            task_classes.append(3)
-        
- #        task_classes = {k:v for k,v in enumerate(task_classes)}
- #        return train_datasets, val_datasets, test_datasets, task_classes
+		test_support = []
+		test_query = []
+		test_classes = []
+		for test_task in meta_testing_tasks:
+			support, query, classes = sample_metaset(config, test_task, 'test', slice=slice)
+			test_support.append(support)
+			test_query.append(query)
+			test_classes.append(classes)
 
+		
+		train_task_classes = {k:v for k,v in enumerate(train_classes)}
+		valid_task_classes = {k:v for k,v in enumerate(valid_classes)}
+		test_task_classes = {k:v for k,v in enumerate(test_classes)}
+		task_classes = (train_task_classes, valid_task_classes, test_task_classes)
+		return Sampler(train_support, train_query), Sampler(valid_support, valid_query), Sampler(test_support, test_query), task_classes
 
 	model = Classifier(config)
-
-	para_train_support, para_train_query = ParaphraseDataset.read(path='./data/msrp/', split='train', ratio=0.5)
-	para_train_support_metaset = MetaDataset.Initialize(para_train_support, config["support_k"])
-	para_train_query_metaset = MetaDataset.Initialize(para_train_query, config["query_k"])
-
-
-	para_test_support, para_test_query = ParaphraseDataset.read(path='./data/msrp/', split='test', ratio=0.5)
-	para_test_support_metaset = MetaDataset.Initialize(para_test_support, config["support_k"])
-	para_test_query_metaset = MetaDataset.Initialize(para_test_query, config["query_k"])
-
-
-	train_sampler = Sampler([para_train_support_metaset], [para_train_query_metaset])
-	valid_sampler = None
-	test_sampler = Sampler([para_test_support_metaset], [para_test_query_metaset])
+	train_sampler, valid_sampler, test_sampler, task_classes = get_tasks(slice=1000)
 
 
 	meta_trainer = MetaTrainer(
 							model = model,
 							train_sampler = train_sampler,
-							valid_sampler = test_sampler,
-							test_sampler = None,
-							task_classes = {0:2},
+							valid_sampler = valid_sampler,
+							test_sampler = test_sampler,
+							task_classes = {'train': task_classes[0], 'valid': task_classes[1], 'test': task_classes[2]},
 							epochs = config["epochs"],
 							inner_lr = config['inner_lr'],
 							outer_lr = config['outer_lr'],
 							n_inner_steps = config["n_inner_steps"],
-							num_episodes = config["n_episodes"],
+							num_episodes = {'train': len(task_classes[0].keys()), 'valid': len(task_classes[1].keys()), 'test': len(task_classes[2].keys())},
 							model_save_path = config["model_save_path"],
 							results_save_path = config["results_save_path"],
 							device = config["device"],
