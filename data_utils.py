@@ -169,7 +169,7 @@ class BaseDataset(Dataset):
     @staticmethod
     def preprocess(sentence, labels=None, label=False):
         if not label:
-            return TOKENIZER(sentence[0], sentence[1], add_special_tokens=True)
+            return TOKENIZER(sentence[0], sentence[1], add_special_tokens=True, truncation=True, max_length=512)
         else:
             return labels[sentence]
     
@@ -194,7 +194,7 @@ class MNLI(BaseDataset):
         self.labels = labels 
      
     @classmethod   
-    def read(cls, path = './multinli_1.0/', split='train', slice_=-1):
+    def read(cls, path = './multinli_1.0/', split='train', ratio=1, slice_=-1):
         labels = {'neutral': 0, 'entailment': 1, 'contradiction': 2}
         split_path = os.path.join(path, 'multinli_1.0_'+ split + '.jsonl')
         data = []
@@ -213,6 +213,13 @@ class MNLI(BaseDataset):
                         {'label':MNLI.preprocess(label_, labels=labels, label=True),
                         'input':MNLI.preprocess((premise, hypothesis))}
                         )
+        if ratio < 1:
+            np.random.shuffle(np.array(data))
+            n_train = int(len(data) * ratio)
+            train_data = data[:n_train]
+            dev_data = data[n_train:]
+
+            return cls(train_data, labels), cls(dev_data, labels)
         return cls(data, labels)
     
 
@@ -227,7 +234,7 @@ class ParaphraseDataset(BaseDataset):
         split_path = os.path.join(path, 'msr_paraphrase_' + split + '.txt')
 
         data = []
-        with open(split_path, 'r') as f:
+        with open(split_path, 'r', encoding='utf8', errors='ignore') as f:
             lines = f.readlines()[1:slice_]
         pbar = lines
         print("Reading and preparing dataset...")
@@ -290,6 +297,147 @@ class StanceDataset(BaseDataset):
         else:
             return cls(data, labels)
 
+class ScitailDataset(BaseDataset):
+    def __init__(self, data, labels):
+        self.data = data
+        self.labels = labels
+    
+    @classmethod
+    def read(cls, path='./data/SciTailV1.1/', split='train', slice_=-1, ratio=1, random_seed=42):
+        labels = {'neutral': 0, 'entails': 1}
+        split_path = os.path.join(path, 'predictor_format', 'scitail_1.0_structure_' + split + '.jsonl')
+        with open(split_path, 'r', encoding='utf8', errors='ignore') as f:
+            lines = f.readlines()[:slice_]
+        data = []
+        print("Reading and Preparing dataset...")
+        for line in lines:
+            line = json.loads(line)
+            label_ = line['gold_label']
+            if label_ not in labels.keys():
+                continue
+            premise = line['sentence1']
+            hypothesis = line['sentence2']
+            data.append(
+                        {'label':ScitailDataset.preprocess(label_, labels=labels, label=True),
+                        'input':ScitailDataset.preprocess((premise, hypothesis))}
+                        )
+        if ratio < 1:
+            np.random.shuffle(np.array(data))
+            n_train = int(len(data) * ratio)
+            train_data = data[:n_train]
+            dev_data = data[n_train:]
+            return cls(train_data, labels), cls(dev_data, labels)
+        else:
+            return cls(data, labels)
+
+class VitaminC(BaseDataset):
+    def __init__(self, data, labels):
+        self.data = data
+        self.labels = labels
+    
+    @classmethod
+    def read(cls, path='./data/vitaminc/', split='train', slice_=-1, ratio=1, random_seed=42):
+        labels = {'NOT ENOUGH INFO': 0, 'SUPPORTS': 1, 'REFUTES': 2}
+        split_path = os.path.join(path, split + '.jsonl')
+        with open(split_path, 'r', encoding='utf8', errors='ignore') as f:
+            lines = f.readlines()[:slice_]
+        data = []
+        pbar = tqdm(lines)
+        for line in pbar:
+            pbar.set_description("Reading and Preparing dataset...")
+            line = json.loads(line)
+            label_ = line['label']
+            if label_ not in labels.keys():
+                continue
+            premise = line['claim']
+            hypothesis = line['evidence']
+            data.append(
+                        {'label':VitaminC.preprocess(label_, labels=labels, label=True),
+                        'input':VitaminC.preprocess((premise, hypothesis))}
+                        )
+        if ratio < 1:
+            np.random.shuffle(np.array(data))
+            n_train = int(len(data) * ratio)
+            train_data = data[:n_train]
+            dev_data = data[n_train:]
+            return cls(train_data, labels), cls(dev_data, labels)
+        else:
+            return cls(data, labels)
+
+
+
+
+def sample_metaset(config, task, split, slice=-1):
+			if task == 'paraphrase':
+				task_classes = 2
+				if split == "train" or split == "valid":
+					support, query = ParaphraseDataset.read(path='./data/msrp/', split='train', ratio=0.5)
+					support_metaset = MetaDataset.Initialize(support, config["support_k"])
+					query_metaset = MetaDataset.Initialize(query, config["query_k"])
+				if split == "test":
+					support, query = ParaphraseDataset.read(path='./data/msrp/', split='test', ratio=0.5)
+					support_metaset = MetaDataset.Initialize(support, config["support_k"])
+					query_metaset = MetaDataset.Initialize(query, config["query_k"])
+				return support_metaset, query_metaset, task_classes
+
+			if task == 'stance':
+				task_classes = 2
+				if split == "train" or split == "valid":
+					support, query = StanceDataset.read(path='./data/stance/', split='train', ratio=0.5)
+					support_metaset = MetaDataset.Initialize(support, config["support_k"])
+					query_metaset = MetaDataset.Initialize(query, config["query_k"])
+				if split == "test":
+					support, query = StanceDataset.read(path='./data/stance/', split='test', ratio=0.5)
+					support_metaset = MetaDataset.Initialize(support, config["support_k"])
+					query_metaset = MetaDataset.Initialize(query, config["query_k"])
+				return support_metaset, query_metaset, task_classes
+			
+			if task == 'mnli':
+				task_classes = 3
+				if split == "train":
+					support, query = MNLI.read(path='./data/multinli_1.0/', split='train', ratio=0.5, slice_=slice)
+					support_metaset = MetaDataset.Initialize(support, config["support_k"])
+					query_metaset = MetaDataset.Initialize(query, config["query_k"])
+				if split == "valid":
+					support, query = MNLI.read(path='./data/multinli_1.0/', split='dev_matched', ratio=0.5, slice_=slice)
+					support_metaset = MetaDataset.Initialize(support, config["support_k"])
+					query_metaset = MetaDataset.Initialize(query, config["query_k"])
+				if split == "test":
+					support, query = MNLI.read(path='./data/multinli_1.0/', split='dev_mismatched', ratio=0.5, slice_=slice)
+					support_metaset = MetaDataset.Initialize(support, config["support_k"])
+					query_metaset = MetaDataset.Initialize(query, config["query_k"])
+				return support_metaset, query_metaset, task_classes
+			
+			if task == 'scitail':
+				task_classes = 2
+				if split == "train":
+					support, query = ScitailDataset.read(split='train', ratio=0.5, slice_=slice)
+					support_metaset = MetaDataset.Initialize(support, config["support_k"])
+					query_metaset = MetaDataset.Initialize(query, config["query_k"])
+				if split == "valid":
+					support, query = ScitailDataset.read(split='dev', ratio=0.5, slice_=slice)
+					support_metaset = MetaDataset.Initialize(support, config["support_k"])
+					query_metaset = MetaDataset.Initialize(query, config["query_k"])
+				if split == "test":
+					support, query = ScitailDataset.read(split='test', ratio=0.5, slice_=slice)
+					support_metaset = MetaDataset.Initialize(support, config["support_k"])
+					query_metaset = MetaDataset.Initialize(query, config["query_k"])
+				return support_metaset, query_metaset, task_classes
+			if task == 'vitaminc':
+				task_classes = 3
+				if split == "train":
+					support, query = VitaminC.read(split='train', ratio=0.5, slice_=slice)
+					support_metaset = MetaDataset.Initialize(support, config["support_k"])
+					query_metaset = MetaDataset.Initialize(query, config["query_k"])
+				if split == "valid":
+					support, query = VitaminC.read(split='dev', ratio=0.5, slice_=slice)
+					support_metaset = MetaDataset.Initialize(support, config["support_k"])
+					query_metaset = MetaDataset.Initialize(query, config["query_k"])
+				if split == "test":
+					support, query = VitaminC.read(split='test', ratio=0.5, slice_=slice)
+					support_metaset = MetaDataset.Initialize(support, config["support_k"])
+					query_metaset = MetaDataset.Initialize(query, config["query_k"])
+				return support_metaset, query_metaset, task_classes
 
 
 
@@ -297,24 +445,29 @@ class StanceDataset(BaseDataset):
 
 if __name__ == "__main__":
 
-    train = MNLI.read(path='./multinli_1.0/', split='train', slice_=1000)
+    # d1 = ScitailDataset.read(slice_ = -1)
+    # print(len(d1))
+    d = VitaminC.read(slice_=-1)
+    print(len(d))
 
-    metadataset = MetaDataset.Initialize(train)
+    # train = MNLI.read(path='./multinli_1.0/', split='train', slice_=1000)
+
+    # metadataset = MetaDataset.Initialize(train)
 
 
-    loader = metadataset.get_dataloaders()[0]
+    # loader = metadataset.get_dataloaders()[0]
     
-    count = 0
-    while True:
-        b = next(loader, -1)
-        print(b)
-        print(count, ": Ok")
-        if b == -1:
-            print("Oops! Loader exhausted. reinitializing...")
-            #reinitialize dataloader...
-            loader = metadataset.get_dataloaders()[0]
-        count+=1
-        break
+    # count = 0
+    # while True:
+    #     b = next(loader, -1)
+    #     print(b)
+    #     print(count, ": Ok")
+    #     if b == -1:
+    #         print("Oops! Loader exhausted. reinitializing...")
+    #         #reinitialize dataloader...
+    #         loader = metadataset.get_dataloaders()[0]
+    #     count+=1
+    #     break
 
 
     #train = StanceDataset.read(path="data/Stance/", split='train', slice_=1000)
