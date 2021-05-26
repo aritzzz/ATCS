@@ -137,7 +137,7 @@ class MetaTrainer(object):
 		
 		self.outer_optimizer = AdamW(self.outer_model.encoder.parameters(),
 									self.outer_lr,  weight_decay=1e-4)
-		self.outer_lr_scheduler = get_cosine_schedule_with_warmup(self.outer_optimizer, num_training_steps=self.n_epochs,  num_warmup_steps=int(0.10*self.n_epochs))
+		self.outer_lr_scheduler = get_cosine_schedule_with_warmup(self.outer_optimizer, num_training_steps=self.n_epochs,  num_warmup_steps=int(0.10*self.n_epochs*self.num_episodes['train']))
 
 		self.inner_results = {"losses":defaultdict(list),
 					"accuracy":defaultdict(list)}
@@ -164,8 +164,10 @@ class MetaTrainer(object):
 
 	def train(self, test_every=1):
 		"""Run episodes and perform outerloop updates """
+		conflict_cosines = []
 		for epoch in range(self.n_epochs):
 			self.outer_optimizer.zero_grad()
+			accumulated_grads = []
 			#for each of the task in the number of meta-training tasks
 			for episode in range(self.num_episodes['train']):
 				print("---- Starting episode {} of epoch {} ----".format(episode, epoch))
@@ -179,7 +181,12 @@ class MetaTrainer(object):
 					self.train_sampler.reset_sampler(episode, type_="query")
 					query_set = self.train_sampler.sample_query(episode)
 
-				self.train_episode(support_set, query_set, episode)
+				grads = self.train_episode(support_set, query_set, episode)
+				accumulated_grads.append(grads)
+			grad_cosine = torch.nn.functional.cosine_similarity(*accumulated_grads,dim=0)
+			print(grad_cosine)
+			conflict_cosines.append(grad_cosine.item())
+
 
 			if epoch % test_every == 0:
 				test_loss, test_acc = self.validate("valid")
@@ -193,6 +200,7 @@ class MetaTrainer(object):
 			self.outer_optimizer.step()
 			self.outer_lr_scheduler.step()
 			self.dump_results()
+		np.savetxt(self.results_save_path + self.exp_name + "_cosines.csv", conflict_cosines)
 		
 		# self.plotter.plot()
 
@@ -264,20 +272,15 @@ class MetaTrainer(object):
 		model.zero_grad()
 		optimizer = AdamW(model.parameters(), lr=self.inner_lr, weight_decay=1e-4)
 
-		support_samples = self._extract(support_set)
-		support_len = len(support_samples['labels'])
+		batch = self._extract(support_set)
 		for _ in range(self.n_inner_steps):
-			batch_idx = np.linspace(0, support_len, self.n_inner_steps + 1, dtype=int)
-			#print(batch_idx)
-			for i, start_idx in enumerate(batch_idx[:-1]):
-				 batch = {k:s[start_idx:batch_idx[i+1]] for k, s in support_samples.items()}
-				 labels = self._to_device(batch['labels'])
-				 optimizer.zero_grad()
-				 logits = self.forward(model, batch)
-				 loss = loss_func(logits, labels)
-				 loss.backward()
-				 torch.nn.utils.clip_grad_norm_(model.parameters(), self.clip_value)
-				 optimizer.step()
+			labels = self._to_device(batch['labels'])
+			optimizer.zero_grad()
+			logits = self.forward(model, batch)
+			loss = loss_func(logits, labels)
+			loss.backward()
+			torch.nn.utils.clip_grad_norm_(model.parameters(), self.clip_value)
+			optimizer.step()
 
 	def get_accuracy(self, logits, labels):
 		#print(logits, labels)
@@ -315,6 +318,19 @@ class MetaTrainer(object):
 				param.grad = grads_inner_model[i] + grads_outer_model[i]
 			else:
 				param.grad += grads_inner_model[i] + grads_outer_model[i]
+
+		grads = []
+		for i, (name, param) in enumerate(self.outer_model.named_parameters()):
+			if 'pooler' in name:
+				continue
+			elif param.grad is None:
+				param.grad = grads_inner_model[i] + grads_outer_model[i]
+				grads.append(param.grad.clone().detach())
+			else:
+				param.grad += grads_inner_model[i] + grads_outer_model[i]
+				grads.append(param.grad.clone().detach())
+		packed_grad = torch.cat([g.flatten() for g in grads])
+		return packed_grad
 
 
 	def validate(self, mode, m=5):
@@ -382,7 +398,8 @@ class MetaTrainer(object):
 
 		# Step 7: Apply trained model on query set.
 		print("---- Calculating gradients on query set ----")
-		self.calc_validation_grads(inner_model, n_classes, query_set, task)
+		grads = self.calc_validation_grads(inner_model, n_classes, query_set, task)
+		return grads
 
 
 
@@ -421,9 +438,9 @@ if __name__ == "__main__":
 
 
 	#All the Tasks that are allowed are: MNLI(has dev set), Paraphrase, Stance, VitaminC(has dev set), SciTail(has dev set)
-	def get_tasks(meta_training_tasks=['mnli','scitail'],
-				meta_validation_tasks=['paraphrase'],
-				meta_testing_tasks=['vitaminc'], slice=-1):
+	def get_tasks(meta_training_tasks=['paraphrase','scitail'],
+				meta_validation_tasks=['stance'],
+				meta_testing_tasks=['stance'], slice=-1):
 		train_support = []
 		train_query = []
 		train_classes = []
@@ -442,24 +459,24 @@ if __name__ == "__main__":
 			valid_query.append(query)
 			valid_classes.append(classes)
 
-		test_support = []
-		test_query = []
-		test_classes = []
-		for test_task in meta_testing_tasks:
-			support, query, classes = sample_metaset(config, test_task, 'test', slice=slice)
-			test_support.append(support)
-			test_query.append(query)
-			test_classes.append(classes)
+		# test_support = []
+		# test_query = []
+		# test_classes = []
+		# for test_task in meta_testing_tasks:
+		# 	support, query, classes = sample_metaset(config, test_task, 'test', slice=slice)
+		# 	test_support.append(support)
+		# 	test_query.append(query)
+		# 	test_classes.append(classes)
 
 		
 		train_task_classes = {k:v for k,v in enumerate(train_classes)}
 		valid_task_classes = {k:v for k,v in enumerate(valid_classes)}
-		test_task_classes = {k:v for k,v in enumerate(test_classes)}
+		test_task_classes = None #{k:v for k,v in enumerate(test_classes)}
 		task_classes = (train_task_classes, valid_task_classes, test_task_classes)
-		return Sampler(train_support, train_query), Sampler(valid_support, valid_query), Sampler(test_support, test_query), task_classes
+		return Sampler(train_support, train_query), Sampler(valid_support, valid_query), None, task_classes
 
 	model = Classifier(config)
-	train_sampler, valid_sampler, test_sampler, task_classes = get_tasks(slice=1000)
+	train_sampler, valid_sampler, test_sampler, task_classes = get_tasks(slice=-1)
 
 
 	meta_trainer = MetaTrainer(
@@ -467,12 +484,12 @@ if __name__ == "__main__":
 							train_sampler = train_sampler,
 							valid_sampler = valid_sampler,
 							test_sampler = test_sampler,
-							task_classes = {'train': task_classes[0], 'valid': task_classes[1], 'test': task_classes[2]},
+							task_classes = {'train': task_classes[0], 'valid': task_classes[1], 'test': None},
 							epochs = config["epochs"],
 							inner_lr = config['inner_lr'],
 							outer_lr = config['outer_lr'],
 							n_inner_steps = config["n_inner_steps"],
-							num_episodes = {'train': len(task_classes[0].keys()), 'valid': len(task_classes[1].keys()), 'test': len(task_classes[2].keys())},
+							num_episodes = {'train': len(task_classes[0].keys()), 'valid': len(task_classes[1].keys()), 'test': None},
 							model_save_path = config["model_save_path"],
 							results_save_path = config["results_save_path"],
 							device = config["device"],
