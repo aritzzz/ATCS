@@ -10,3 +10,5 @@ slurm_output*
 results/
 saved_models/
 figs/
+.ipynb_checkpoints
+*.txt
