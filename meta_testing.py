@@ -119,7 +119,7 @@ class MetaTester(MetaTrainer):
 		self.test_results["losses"][task].append(losses_)
 		self.test_results["accuracy"][task].append(accuracies_)
 		#self.plotter.update({"loss" : avg_loss, "accuracy": avg_acc})
-		return avg_loss, avg_acc		
+		# return avg_loss, avg_acc		
 
 
 
