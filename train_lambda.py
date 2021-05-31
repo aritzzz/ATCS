@@ -118,6 +118,8 @@ class MultiTaskTrainer(pl.LightningModule):
         self.lambda_ = self.config['lambda']
         self.grad_cum = config['grad_cum']
         self.task_grad_cums = {0: [0, None], 1: [0, None]}
+        self.src_loss = 0
+        self.aux_loss = 0
 
     def forward(self, batch, src):
         """Performs a forward pass on the batch."""
@@ -170,7 +172,8 @@ class MultiTaskTrainer(pl.LightningModule):
             # reset task_grads:
             self.task_grad_cums = self.task_grad_cums = {0: [0, None], 1: [0, None]}
 
-        
+    def calc_lambda(self, loss):
+        self.lambda_ = (0.1 * self.src_loss - self.aux_loss) / loss
 
     def training_step(self, batch, batch_idx):
         task, samples = batch 
@@ -182,6 +185,13 @@ class MultiTaskTrainer(pl.LightningModule):
         loss = self.loss_func(logits, labels)
         acc = self.calc_accuracy(logits, labels)
         
+        if src:
+            self.src_loss += loss.item()
+        else:
+            self.calc_lambda(loss.item())
+            self.aux_loss += self.lambda_ * loss.item()
+            loss = self.lambda_ * loss
+
         opt.zero_grad()
         loss.backward()
         self.calc_cosine_sim(task) 
@@ -380,8 +390,8 @@ if __name__ == "__main__":
 
     config = parser.parse_args().__dict__
 
-    para_train = ScitailDataset.read(path='data/SciTailV1.1/', split='train')
-    para_dev = ScitailDataset.read(path='data/SciTailV1.1/', split='dev')
+    para_train = MNLI.read(path='data/multinli_1.0/', split='train')
+    para_dev = MNLI.read(path='data/multinli_1.0/', split='dev_matched')
     para_train_load = DataLoader(para_train, 
                                 batch_size=config['batch_size'], 
                                 shuffle=True,
@@ -390,7 +400,7 @@ if __name__ == "__main__":
                             batch_size=config['batch_size'], 
                             collate_fn=collator2)
 
-    para_test = ScitailDataset.read(path='data/SciTailV1.1/', split='test')
+    para_test = MNLI.read(path='data/multinli_1.0/', split='dev_mismatched')
     para_test_load = DataLoader(para_test, 
                                 batch_size=config['batch_size'], 
                                 collate_fn=collator2)
@@ -398,8 +408,7 @@ if __name__ == "__main__":
     config['n_steps'] = len(para_train) * config['max_epochs']
 
     if config["multitask"]:
-        stance_train = ScitailDataset.read(path='data/SciTailV1.1/', split='train')
-        stance_dev = ScitailDataset.read(path='data/SciTailV1.1/', split='dev')
+        stance_train, stance_dev = StanceDataset.read(path='data/Stance/', split='train', ratio=0.9)
         stance_train_load = DataLoader(stance_train,
                                     batch_size=config['batch_size'],
                                     shuffle=True,
@@ -408,15 +417,14 @@ if __name__ == "__main__":
                                     batch_size=config['batch_size'],
                                     shuffle=True,
                                     collate_fn=collator2)
-        stance_test = ScitailDataset.read(path='data/SciTailV1.1/', split='test')
+        stance_test = StanceDataset.read(path='data/Stance/', split='test')
         stance_test_load = DataLoader(stance_test,
                                     batch_size=config['batch_size'],
                                     shuffle=True,
                                     collate_fn=collator2) 
         
-        # LETOP!! src & aux omgewisseld.
-        train_multitask([stance_train_load, stance_dev_load, stance_test_load],
-                    [para_train_load, para_dev_load, para_test_load],
+        train_multitask([para_train_load, para_dev_load, para_test_load],
+                    [stance_train_load, stance_dev_load, stance_test_load],
                     config)
 
     else:
